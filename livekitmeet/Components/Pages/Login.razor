@@ -1,0 +1,52 @@
+@page "/login"
+@layout EmptyLayout
+@rendermode InteractiveServer
+
+<PageTitle>Sign in - LiveKit Meet</PageTitle>
+
+<div class="lobby-container">
+    <div class="lobby-card">
+        <h1 class="lobby-title">LiveKit Meet</h1>
+        <p class="lobby-subtitle">Sign in with the account created by your administrator.</p>
+
+        @if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            <div class="auth-alert auth-alert-error">@ErrorMessage</div>
+        }
+        @if (Changed == "1")
+        {
+            <div class="auth-alert auth-alert-success">Password changed. Sign in again with your new password.</div>
+        }
+        @if (LoggedOut == "1")
+        {
+            <div class="auth-alert auth-alert-success">You have been signed out.</div>
+        }
+
+        <form method="post" action="/api/auth/login">
+            <div class="form-group">
+                <label class="form-label" for="username">Username</label>
+                <input id="username" name="username" class="form-input" autocomplete="username" required autofocus />
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input id="password" name="password" type="password" class="form-input" autocomplete="current-password" required />
+            </div>
+            <button type="submit" class="btn-primary">Sign in</button>
+        </form>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    [SupplyParameterFromQuery(Name = "changed")]
+    public string? Changed { get; set; }
+
+    [SupplyParameterFromQuery(Name = "loggedOut")]
+    public string? LoggedOut { get; set; }
+
+    private string? ErrorMessage => Error == "invalid"
+        ? "Invalid username or password."
+        : Error;
+}

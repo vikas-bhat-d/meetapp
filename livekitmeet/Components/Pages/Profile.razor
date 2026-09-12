@@ -1,0 +1,39 @@
+@page "/profile"
+@attribute [Authorize]
+@layout MainLayout
+@rendermode InteractiveServer
+
+<PageTitle>My profile - LiveKit Meet</PageTitle>
+
+<div class="admin-page">
+    <div class="admin-header">
+        <div>
+            <h1>My profile</h1>
+            <p>Change your password. All existing sessions will be signed out after the change.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="auth-alert auth-alert-error">@Error</div>
+    }
+
+    <div class="admin-card profile-card">
+        <form method="post" action="/api/auth/change-password">
+            <div class="form-group">
+                <label class="form-label" for="currentPassword">Current password</label>
+                <input id="currentPassword" name="currentPassword" type="password" class="form-input" autocomplete="current-password" required />
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="newPassword">New password</label>
+                <input id="newPassword" name="newPassword" type="password" class="form-input" minlength="8" autocomplete="new-password" required />
+            </div>
+            <button type="submit" class="btn-primary">Change password</button>
+        </form>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+}

@@ -1,0 +1,69 @@
+@page "/"
+@attribute [Authorize]
+@layout EmptyLayout
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+
+<PageTitle>LiveKit Meet - Blazor</PageTitle>
+
+<div class="lobby-container">
+    <div class="lobby-card">
+        <h1 class="lobby-title">LiveKit Video Meet</h1>
+        <p class="lobby-subtitle">Audio & Video Conference with Blazor + LiveKit</p>
+
+        <form @onsubmit="JoinMeeting">
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <label class="form-label" style="margin-bottom: 0;" for="roomName">Room Name</label>
+                    <button type="button" class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" @onclick="GenerateRandomRoom">
+                        Generate
+                    </button>
+                </div>
+                <input id="roomName" class="form-input" @bind="roomName" placeholder="e.g. daily-standup" required />
+            </div>
+
+            <div class="form-group" style="display: flex; gap: 1.5rem; margin: 1.5rem 0;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
+                    <input type="checkbox" @bind="audioEnabled" />
+                    <span>Microphone On</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
+                    <input type="checkbox" @bind="videoEnabled" />
+                    <span>Camera On</span>
+                </label>
+            </div>
+
+            <button type="submit" class="btn-primary" disabled="@string.IsNullOrWhiteSpace(roomName)">
+                Join Meeting
+            </button>
+        </form>
+    </div>
+</div>
+
+@code {
+    private string roomName = "";
+    private bool audioEnabled = true;
+    private bool videoEnabled = true;
+
+    protected override void OnInitialized()
+    {
+        GenerateRandomRoom();
+    }
+
+    private void GenerateRandomRoom()
+    {
+        var words = new[] { "swift", "cozy", "bright", "sunny", "gentle", "clever", "calm", "rapid", "silent", "brave" };
+        var nouns = new[] { "stream", "haven", "summit", "orbit", "valley", "canyon", "meadow", "harbor", "spark", "beacon" };
+        var random = new Random();
+        roomName = $"{words[random.Next(words.Length)]}-{nouns[random.Next(nouns.Length)]}-{random.Next(100, 999)}";
+    }
+
+    private void JoinMeeting()
+    {
+        if (string.IsNullOrWhiteSpace(roomName))
+            return;
+
+        var url = $"/rooms/{Uri.EscapeDataString(roomName.Trim())}?audio={audioEnabled.ToString().ToLower()}&video={videoEnabled.ToString().ToLower()}";
+        Navigation.NavigateTo(url);
+    }
+}

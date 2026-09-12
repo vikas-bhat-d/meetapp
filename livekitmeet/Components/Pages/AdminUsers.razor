@@ -1,0 +1,175 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = "Admin")]
+@layout MainLayout
+@rendermode InteractiveServer
+@inject IUserAdministrationService UserAdministration
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>User administration - LiveKit Meet</PageTitle>
+
+<div class="admin-page">
+    <div class="admin-header">
+        <div>
+            <h1>User administration</h1>
+            <p>Create accounts for meeting participants and remove access when needed.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(statusMessage))
+    {
+        <div class="auth-alert @(statusIsError ? "auth-alert-error" : "auth-alert-success")">@statusMessage</div>
+    }
+
+    <div class="admin-grid">
+        <section class="admin-card">
+            <h2>Add user</h2>
+            <p class="admin-help">Users cannot register themselves. Give the user this initial password; they can change it from their profile.</p>
+            <form @onsubmit="CreateUserAsync">
+                <div class="form-group">
+                    <label class="form-label" for="newUsername">Username</label>
+                    <input id="newUsername" class="form-input" @bind="newUsername" autocomplete="off" required />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="newDisplayName">Display name</label>
+                    <input id="newDisplayName" class="form-input" @bind="newDisplayName" required />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="newPassword">Initial password</label>
+                    <input id="newPassword" type="password" class="form-input" @bind="newPassword" minlength="8" required />
+                </div>
+                <label class="admin-checkbox">
+                    <input type="checkbox" @bind="newUserIsAdmin" />
+                    <span>Administrator</span>
+                </label>
+                <button type="submit" class="btn-primary" disabled="@isSaving">@(isSaving ? "Creating..." : "Create user")</button>
+            </form>
+        </section>
+
+        <section class="admin-card">
+            <div class="admin-card-heading">
+                <h2>Users</h2>
+                <button type="button" class="btn-secondary" @onclick="LoadUsersAsync">Refresh</button>
+            </div>
+            @if (users is null)
+            {
+                <p class="admin-help">Loading users...</p>
+            }
+            else if (users.Count == 0)
+            {
+                <p class="admin-help">No users found.</p>
+            }
+            else
+            {
+                <div class="user-table-wrap">
+                    <table class="user-table">
+                        <thead>
+                            <tr><th>User</th><th>Role</th><th>Status</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var user in users)
+                            {
+                                <tr>
+                                    <td><strong>@user.UserName</strong><br /><span>@user.DisplayName</span></td>
+                                    <td>@(user.IsAdmin ? "Admin" : "User")</td>
+                                    <td><span class="user-status @(user.IsActive ? "user-status-active" : "user-status-inactive")">@(user.IsActive ? "Active" : "Removed")</span></td>
+                                    <td>
+                                        @if (user.Id != currentUserId)
+                                        {
+                                            <button type="button" class="btn-secondary user-action" @onclick="() => ToggleUserAsync(user)">
+                                                @(user.IsActive ? "Remove" : "Restore")
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <span class="admin-help">You</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<UserListItem>? users;
+    private ClaimsPrincipal currentUser = new ClaimsPrincipal(new ClaimsIdentity());
+    private Guid currentUserId;
+    private string newUsername = string.Empty;
+    private string newDisplayName = string.Empty;
+    private string newPassword = string.Empty;
+    private bool newUserIsAdmin;
+    private bool isSaving;
+    private string? statusMessage;
+    private bool statusIsError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = authState.User;
+        Guid.TryParse(currentUser.FindFirstValue(ClaimTypes.NameIdentifier), out currentUserId);
+        await LoadUsersAsync();
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        try
+        {
+            users = await UserAdministration.GetUsersAsync(currentUser);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+    }
+
+    private async Task CreateUserAsync()
+    {
+        isSaving = true;
+        statusMessage = null;
+        try
+        {
+            var result = await UserAdministration.CreateUserAsync(
+                currentUser,
+                newUsername,
+                newDisplayName,
+                newPassword,
+                newUserIsAdmin);
+            if (!result.Success)
+            {
+                SetStatus(result.Error ?? "Unable to create user.", true);
+                return;
+            }
+
+            newUsername = string.Empty;
+            newDisplayName = string.Empty;
+            newPassword = string.Empty;
+            newUserIsAdmin = false;
+            SetStatus("User created.", false);
+            await LoadUsersAsync();
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ToggleUserAsync(UserListItem user)
+    {
+        var result = await UserAdministration.SetActiveAsync(currentUser, user.Id, !user.IsActive);
+        SetStatus(result.Success ? (user.IsActive ? "User removed." : "User restored.") : result.Error ?? "Unable to update user.", !result.Success);
+        if (result.Success)
+        {
+            await LoadUsersAsync();
+        }
+    }
+
+    private void SetStatus(string message, bool isError)
+    {
+        statusMessage = message;
+        statusIsError = isError;
+    }
+}

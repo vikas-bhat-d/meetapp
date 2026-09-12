@@ -1,0 +1,433 @@
+@page "/rooms/{RoomName}"
+@attribute [Authorize]
+@layout EmptyLayout
+@rendermode InteractiveServer
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@implements IAsyncDisposable
+
+<PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
+
+@if (needsPreJoin)
+{
+    <div class="lobby-container">
+        <div class="lobby-card">
+            <h1 class="lobby-title">Join Room: @RoomName</h1>
+            <p class="lobby-subtitle">You will join as <strong>@participantName</strong>.</p>
+
+            <form @onsubmit="StartJoin">
+                <div class="form-group" style="display: flex; gap: 1.5rem; margin: 1.5rem 0;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
+                        <input type="checkbox" @bind="isAudioEnabled" />
+                        <span>Microphone</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
+                        <input type="checkbox" @bind="isVideoEnabled" />
+                        <span>Camera</span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn-primary" disabled="@string.IsNullOrWhiteSpace(participantName)">
+                    Enter Room
+                </button>
+            </form>
+        </div>
+    </div>
+}
+else
+{
+    <div class="meet-container">
+        <!-- Top Header (Blazor Managed) -->
+        <header class="meet-header">
+            <div class="meet-header-left">
+                <div class="room-badge">
+                    <span>📡</span>
+                    <span>@RoomName</span>
+                </div>
+                <span class="connection-status @GetStatusCssClass()">@connectionStatus</span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <button class="header-btn" @onclick="() => showInviteModal = true">
+                    <span>➕</span>
+                    <span>Invite</span>
+                </button>
+                <button class="header-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer">
+                    <span>👥</span>
+                    <span>@participants.Count</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Video Grid Stage: JS completely controls the interior of #livekit-video-grid -->
+        <main class="meet-stage">
+            <div id="livekit-video-grid" class="livekit-video-grid"></div>
+        </main>
+
+        <!-- Bottom Controls Toolbar (Blazor Managed) -->
+        <footer class="meet-controls">
+            <!-- Audio Toggle -->
+            <button class="control-btn @(!isAudioEnabled ? "active-off" : "")" @onclick="ToggleAudioAsync" title="@(isAudioEnabled ? "Mute Microphone" : "Unmute Microphone")">
+                <span class="control-icon">@(isAudioEnabled ? "🎤" : "🔇")</span>
+                <span>@(isAudioEnabled ? "Mute" : "Unmute")</span>
+            </button>
+
+            <!-- Video Toggle -->
+            <button class="control-btn @(!isVideoEnabled ? "active-off" : "")" @onclick="ToggleVideoAsync" title="@(isVideoEnabled ? "Turn Off Camera" : "Turn On Camera")">
+                <span class="control-icon">@(isVideoEnabled ? "📹" : "📷")</span>
+                <span>@(isVideoEnabled ? "Stop Cam" : "Start Cam")</span>
+            </button>
+
+            <!-- Participants Drawer Toggle -->
+            <button class="control-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer" title="View Participants">
+                <span class="control-icon">👥</span>
+                <span>People (@participants.Count)</span>
+            </button>
+
+            <!-- Ring / Invite Modal Toggle -->
+            <button class="control-btn btn-invite" @onclick="() => showInviteModal = true" title="Invite & Ring Participants">
+                <span class="control-icon">📞</span>
+                <span>Invite</span>
+            </button>
+
+            <!-- Leave Room -->
+            <button class="control-btn btn-leave" @onclick="LeaveRoomAsync" title="Leave Meeting">
+                <span class="control-icon">🚪</span>
+                <span>Leave</span>
+            </button>
+        </footer>
+
+        <!-- Side Drawer: Participant List (Blazor Managed) -->
+        @if (showParticipantsDrawer)
+        {
+            <aside class="meet-drawer">
+                <div class="drawer-header">
+                    <h3 class="drawer-title">Participants (@participants.Count)</h3>
+                    <button class="drawer-close" @onclick="() => showParticipantsDrawer = false">✕</button>
+                </div>
+                <div class="drawer-content">
+                    @foreach (var p in participants)
+                    {
+                        <div class="participant-item">
+                            <div class="participant-info">
+                                <div class="participant-avatar-small">
+                                    @(string.IsNullOrWhiteSpace(p.Name) ? "?" : p.Name.Trim().Substring(0, 1).ToUpper())
+                                </div>
+                                <div>
+                                    <span class="participant-name">@p.Name</span>
+                                    @if (p.IsLocal)
+                                    {
+                                        <span class="participant-badge-you">(You)</span>
+                                    }
+                                </div>
+                            </div>
+                            <div>
+                                <span>@(p.IsAudioEnabled ? "🎤" : "🔇")</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </aside>
+        }
+
+        <!-- Modal: Invite & Ring Participant (Blazor Managed for Future Ringing Integration) -->
+        @if (showInviteModal)
+        {
+            <div class="modal-backdrop" @onclick="() => showInviteModal = false">
+                <div class="modal-card" @onclick:stopPropagation="true">
+                    <h3 class="modal-title">Invite to Meeting</h3>
+                    <p style="color: var(--lk-text-secondary); font-size: 0.875rem; margin-bottom: 0.5rem;">
+                        Share this meeting link with others to invite them:
+                    </p>
+
+                    <div class="copy-input-group">
+                        <input class="copy-input" readonly value="@GetShareableMeetingUrl()" />
+                        <button class="btn-primary" style="width: auto; padding: 0.6rem 1rem;" @onclick="CopyMeetingLinkAsync">
+                            @(isCopied ? "Copied!" : "Copy")
+                        </button>
+                    </div>
+
+                    <hr style="border: 0; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 1.5rem 0;" />
+
+                    <!-- Ringing / Participant Invitation Controls (Ready for future backend signaling) -->
+                    <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Ring / Call Participant</h4>
+                    <p style="color: var(--lk-text-secondary); font-size: 0.8rem; margin-bottom: 0.75rem;">
+                        Enter a user identifier or username to ring them directly.
+                    </p>
+
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input class="form-input" @bind="inviteUsername" placeholder="Enter username or ID" style="flex: 1;" />
+                        <button class="btn-primary btn-invite" style="width: auto; padding: 0.6rem 1rem;" @onclick="RingParticipantAsync" disabled="@(string.IsNullOrWhiteSpace(inviteUsername) || isRinging)">
+                            @(isRinging ? "Ringing..." : "Ring")
+                        </button>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(ringStatusMessage))
+                    {
+                        <div style="margin-top: 0.75rem; font-size: 0.85rem; color: #60a5fa;">
+                            @ringStatusMessage
+                        </div>
+                    }
+
+                    <div style="margin-top: 1.5rem; text-align: right;">
+                        <button class="btn-secondary" @onclick="() => showInviteModal = false">Close</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string RoomName { get; set; } = "";
+
+    [SupplyParameterFromQuery(Name = "audio")]
+    public string? QueryAudio { get; set; }
+
+    [SupplyParameterFromQuery(Name = "video")]
+    public string? QueryVideo { get; set; }
+
+    private string participantName = "";
+    private bool needsPreJoin = false;
+    private bool isAudioEnabled = true;
+    private bool isVideoEnabled = true;
+    private string connectionStatus = "Connecting...";
+    private bool showParticipantsDrawer = false;
+    private bool showInviteModal = false;
+    private bool isCopied = false;
+    private string inviteUsername = "";
+    private bool isRinging = false;
+    private string ringStatusMessage = "";
+
+    private List<ParticipantDto> participants = new();
+    private DotNetObjectReference<Room>? dotNetRef;
+    private bool hasJoined = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        participantName = authState.User.FindFirst("display_name")?.Value?.Trim() ??
+                          authState.User.Identity?.Name?.Trim() ??
+                          string.Empty;
+
+        var hasAudioFlag = bool.TryParse(QueryAudio, out var a);
+        if (hasAudioFlag)
+        {
+            isAudioEnabled = a;
+        }
+        var hasVideoFlag = bool.TryParse(QueryVideo, out var v);
+        if (hasVideoFlag)
+        {
+            isVideoEnabled = v;
+        }
+
+        // Links that include both choices can open directly. Older/shareable
+        // links without both flags still get the confirmation screen.
+        needsPreJoin = !hasAudioFlag || !hasVideoFlag;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !needsPreJoin && !hasJoined)
+        {
+            await ConnectToRoomAsync();
+        }
+    }
+
+    private async Task StartJoin()
+    {
+        if (string.IsNullOrWhiteSpace(participantName))
+            return;
+
+        needsPreJoin = false;
+        StateHasChanged();
+
+        // Connect after pre-join submission
+        await ConnectToRoomAsync();
+    }
+
+    private async Task ConnectToRoomAsync()
+    {
+        if (hasJoined) return;
+        hasJoined = true;
+
+        try
+        {
+            connectionStatus = "Connecting...";
+            StateHasChanged();
+
+            // The protected API validates the access-token cookie and only then creates the LiveKit JWT.
+            var connDetails = await JSRuntime.InvokeAsync<ConnectionDetailsDto>(
+                "livekitBridge.fetchConnectionDetails",
+                RoomName);
+
+            dotNetRef = DotNetObjectReference.Create(this);
+
+            var userChoices = new
+            {
+                audioEnabled = isAudioEnabled,
+                videoEnabled = isVideoEnabled
+            };
+
+            // 2. Instruct JS Bridge to join room and render media streams inside #livekit-video-grid
+            await JSRuntime.InvokeVoidAsync(
+                "livekitBridge.joinRoom",
+                "livekit-video-grid",
+                connDetails.ServerUrl,
+                connDetails.ParticipantToken,
+                dotNetRef,
+                userChoices
+            );
+        }
+        catch (Exception ex)
+        {
+            connectionStatus = "Error";
+            Console.WriteLine($"[Room] Connection error: {ex.Message}");
+            StateHasChanged();
+        }
+    }
+
+    public async Task ToggleAudioAsync()
+    {
+        try
+        {
+            var newState = await JSRuntime.InvokeAsync<bool>("livekitBridge.toggleAudio");
+            isAudioEnabled = newState;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Room] Error toggling audio: {ex.Message}");
+        }
+    }
+
+    public async Task ToggleVideoAsync()
+    {
+        try
+        {
+            var newState = await JSRuntime.InvokeAsync<bool>("livekitBridge.toggleVideo");
+            isVideoEnabled = newState;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Room] Error toggling video: {ex.Message}");
+        }
+    }
+
+    public async Task LeaveRoomAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("livekitBridge.leaveRoom");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Room] Error leaving room: {ex.Message}");
+        }
+        finally
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private async Task CopyMeetingLinkAsync()
+    {
+        var url = GetShareableMeetingUrl();
+        var ok = await JSRuntime.InvokeAsync<bool>("livekitBridge.copyToClipboard", url);
+        if (ok)
+        {
+            isCopied = true;
+            StateHasChanged();
+            await Task.Delay(2000);
+            isCopied = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RingParticipantAsync()
+    {
+        if (string.IsNullOrWhiteSpace(inviteUsername)) return;
+
+        isRinging = true;
+        ringStatusMessage = $"Calling {inviteUsername}... (Signaling ringing request)";
+        StateHasChanged();
+
+        // Simulate ringing signal dispatch / preparation for future backend ringing API
+        await Task.Delay(1500);
+        isRinging = false;
+        ringStatusMessage = $"Ringing invitation dispatched to '{inviteUsername}'.";
+        StateHasChanged();
+    }
+
+    private string GetShareableMeetingUrl()
+    {
+        var baseUri = Navigation.BaseUri.TrimEnd('/');
+        return $"{baseUri}/rooms/{Uri.EscapeDataString(RoomName)}?audio={isAudioEnabled.ToString().ToLowerInvariant()}&video={isVideoEnabled.ToString().ToLowerInvariant()}";
+    }
+
+    private string GetStatusCssClass() => connectionStatus switch
+    {
+        "Connected" => "status-connected",
+        "Connecting..." => "status-connecting",
+        _ => "status-disconnected"
+    };
+
+    [JSInvokable]
+    public void OnRoomConnected(string roomName, string identity)
+    {
+        connectionStatus = "Connected";
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnConnectionStatusChanged(string status)
+    {
+        connectionStatus = status;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnConnectionError(string message)
+    {
+        connectionStatus = "Error: " + message;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnDisconnected()
+    {
+        connectionStatus = "Disconnected";
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnParticipantsUpdated(List<ParticipantDto> updatedList)
+    {
+        participants = updatedList ?? new();
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnTrackStateChanged(bool audio, bool video)
+    {
+        isAudioEnabled = audio;
+        isVideoEnabled = video;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("livekitBridge.leaveRoom");
+        }
+        catch
+        {
+            // Ignore during page unload
+        }
+        dotNetRef?.Dispose();
+    }
+}

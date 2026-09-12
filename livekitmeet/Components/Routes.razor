@@ -1,0 +1,25 @@
+<CascadingAuthenticationState>
+    <Router AppAssembly="typeof(Program).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+                <NotAuthorized>
+                    <LayoutView Layout="typeof(Layout.EmptyLayout)">
+                        <div class="lobby-container">
+                            <div class="lobby-card">
+                                <h1 class="lobby-title">Sign in required</h1>
+                                <p class="lobby-subtitle">Please sign in before opening LiveKit Meet.</p>
+                                <a class="btn-primary" href="/login" style="display: block; text-align: center; text-decoration: none;">Go to sign in</a>
+                            </div>
+                        </div>
+                    </LayoutView>
+                </NotAuthorized>
+                <Authorizing>
+                    <LayoutView Layout="typeof(Layout.EmptyLayout)">
+                        <div class="lobby-container"><div class="lobby-card"><p class="lobby-subtitle">Checking your session...</p></div></div>
+                    </LayoutView>
+                </Authorizing>
+            </AuthorizeRouteView>
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+    </Router>
+</CascadingAuthenticationState>
