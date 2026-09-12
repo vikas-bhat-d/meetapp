@@ -5,6 +5,7 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JSRuntime
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ICallInvitationService CallInvitationService
 @implements IAsyncDisposable
 
 <PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
@@ -157,7 +158,7 @@ else
                     </p>
 
                     <div style="display: flex; gap: 0.5rem;">
-                        <input class="form-input" @bind="inviteUsername" placeholder="Enter username or ID" style="flex: 1;" />
+                        <input class="form-input" @bind="inviteUsername" placeholder="Enter username" style="flex: 1;" />
                         <button class="btn-primary btn-invite" style="width: auto; padding: 0.6rem 1rem;" @onclick="RingParticipantAsync" disabled="@(string.IsNullOrWhiteSpace(inviteUsername) || isRinging)">
                             @(isRinging ? "Ringing..." : "Ring")
                         </button>
@@ -352,14 +353,33 @@ else
         if (string.IsNullOrWhiteSpace(inviteUsername)) return;
 
         isRinging = true;
-        ringStatusMessage = $"Calling {inviteUsername}... (Signaling ringing request)";
+        ringStatusMessage = $"Calling {inviteUsername}...";
         StateHasChanged();
 
-        // Simulate ringing signal dispatch / preparation for future backend ringing API
-        await Task.Delay(1500);
-        isRinging = false;
-        ringStatusMessage = $"Ringing invitation dispatched to '{inviteUsername}'.";
-        StateHasChanged();
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var result = await CallInvitationService.SendAsync(
+                authState.User,
+                inviteUsername,
+                RoomName,
+                GetShareableMeetingUrl(),
+                isAudioEnabled,
+                isVideoEnabled);
+
+            ringStatusMessage = result.Success
+                ? $"Invitation sent to '{inviteUsername}'."
+                : result.Error ?? "The invitation could not be sent.";
+        }
+        catch (Exception ex)
+        {
+            ringStatusMessage = ex.Message;
+        }
+        finally
+        {
+            isRinging = false;
+            StateHasChanged();
+        }
     }
 
     private string GetShareableMeetingUrl()

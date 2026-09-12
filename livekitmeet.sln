@@ -5,6 +5,8 @@ VisualStudioVersion = 17.14.37628.2 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "livekitmeet", "livekitmeet\livekitmeet.csproj", "{889C7445-032B-425A-91D9-91475056A5B0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LiveKitMeet.Tray", "LiveKitMeet.Tray\LiveKitMeet.Tray.csproj", "{F3A9A3C0-4D66-4B29-A0DA-5BE3B7C220B6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -13,8 +15,12 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{889C7445-032B-425A-91D9-91475056A5B0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{889C7445-032B-425A-91D9-91475056A5B0}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{889C7445-032B-425A-91D9-91475056A5B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{889C7445-032B-425A-91D9-91475056A5B0}.Release|Any CPU.Build.0 = Release|Any CPU
+	{889C7445-032B-425A-91D9-91475056A5B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	{889C7445-032B-425A-91D9-91475056A5B0}.Release|Any CPU.Build.0 = Release|Any CPU
+	{F3A9A3C0-4D66-4B29-A0DA-5BE3B7C220B6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+	{F3A9A3C0-4D66-4B29-A0DA-5BE3B7C220B6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+	{F3A9A3C0-4D66-4B29-A0DA-5BE3B7C220B6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	{F3A9A3C0-4D66-4B29-A0DA-5BE3B7C220B6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

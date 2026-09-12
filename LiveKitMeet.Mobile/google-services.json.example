@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "REPLACE_FROM_FIREBASE",
+    "project_id": "REPLACE_FROM_FIREBASE",
+    "storage_bucket": "REPLACE_FROM_FIREBASE"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "REPLACE_FROM_FIREBASE",
+        "android_client_info": {
+          "package_name": "com.livekitmeet.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_FROM_FIREBASE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

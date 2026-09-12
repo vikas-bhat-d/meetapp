@@ -1,6 +1,7 @@
-bin/
-obj/
-*.db
-*.db-shm
-*.db-wal
-.vs/*
+**/bin/
+**/obj/
+.vs/
+livekitmeet/*.db
+livekitmeet/*.db-shm
+livekitmeet/*.db-wal
+livekitmeet/appsettings.Development.json

@@ -10,6 +10,7 @@ public sealed class AppDbContext : DbContext
 
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
+    public DbSet<PushDevice> PushDevices => Set<PushDevice>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,6 +34,19 @@ public sealed class AppDbContext : DbContext
             entity.HasOne(session => session.User)
                 .WithMany(user => user.AuthSessions)
                 .HasForeignKey(session => session.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PushDevice>(entity =>
+        {
+            entity.HasKey(device => device.Id);
+            entity.Property(device => device.Platform).HasMaxLength(32).IsRequired();
+            entity.Property(device => device.PushToken).HasMaxLength(4096).IsRequired();
+            entity.HasIndex(device => device.PushToken).IsUnique();
+            entity.HasIndex(device => device.UserId);
+            entity.HasOne(device => device.User)
+                .WithMany()
+                .HasForeignKey(device => device.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

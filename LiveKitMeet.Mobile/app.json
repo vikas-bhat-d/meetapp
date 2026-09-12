@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "LiveKit Meet",
+    "slug": "livekit-meet-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "livekitmeet",
+    "plugins": [
+      "expo-notifications",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.livekitmeet.mobile",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "extra": {
+      "serverUrl": "http://192.168.1.6:5189"
+    }
+  }
+}

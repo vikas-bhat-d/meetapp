@@ -1,10 +1,12 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text;
 using livekitmeet.Components;
 using livekitmeet.Data;
 using livekitmeet.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
@@ -12,8 +14,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+builder.Services.AddSignalR();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient();
 
 var databaseProvider = builder.Configuration["Database:Provider"]?.Trim().ToLowerInvariant() ?? "sqlite";
 var connectionString = builder.Configuration["Database:ConnectionString"] ??
@@ -43,6 +47,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddSingleton<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserAdministrationService, UserAdministrationService>();
+builder.Services.AddSingleton<CallInvitationConnectionTracker>();
+builder.Services.AddScoped<ICallInvitationService, CallInvitationService>();
+builder.Services.AddScoped<IFirebasePushNotificationService, FirebasePushNotificationService>();
 builder.Services.AddSingleton<ILiveKitTokenService, LiveKitTokenService>();
 
 var jwtSecret = builder.Configuration["Auth:JwtSecret"];
@@ -77,7 +84,22 @@ builder.Services.AddAuthentication(options =>
             {
                 if (string.IsNullOrWhiteSpace(context.Token))
                 {
+                    var authorization = context.Request.Headers.Authorization.ToString();
+                    if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        context.Token = authorization["Bearer ".Length..].Trim();
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(context.Token))
+                {
                     context.Token = context.Request.Cookies[AuthService.AccessTokenCookieName];
+                }
+
+                if (string.IsNullOrWhiteSpace(context.Token) &&
+                    context.Request.Path.StartsWithSegments("/hubs/call-invitations"))
+                {
+                    context.Token = context.Request.Query["access_token"];
                 }
 
                 if (!string.IsNullOrWhiteSpace(context.Token))
@@ -155,6 +177,17 @@ app.MapPost("/api/auth/login", async (HttpContext context, IAuthService authServ
     return Results.Redirect("/");
 }).AllowAnonymous();
 
+app.MapPost("/api/auth/token", async (AuthTokenLoginRequest request, IAuthService authService) =>
+{
+    var result = await authService.LoginAsync(request.Username, request.Password);
+    if (!result.Success || result.Tokens is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    return Results.Ok(result.Tokens);
+}).AllowAnonymous();
+
 app.MapPost("/api/auth/refresh", async (HttpContext context, IAuthService authService) =>
 {
     var refreshToken = context.Request.Cookies[AuthService.RefreshTokenCookieName];
@@ -169,6 +202,17 @@ app.MapPost("/api/auth/refresh", async (HttpContext context, IAuthService authSe
     return Results.NoContent();
 }).AllowAnonymous();
 
+app.MapPost("/api/auth/token/refresh", async (AuthTokenRefreshRequest request, IAuthService authService) =>
+{
+    var result = await authService.RefreshAsync(request.RefreshToken);
+    if (!result.Success || result.Tokens is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    return Results.Ok(result.Tokens);
+}).AllowAnonymous();
+
 app.MapPost("/api/auth/logout", async (HttpContext context, IAuthService authService) =>
 {
     await authService.RevokeAsync(
@@ -178,6 +222,77 @@ app.MapPost("/api/auth/logout", async (HttpContext context, IAuthService authSer
     authService.ClearAuthCookies(context);
     return Results.Redirect("/login?loggedOut=1");
 }).AllowAnonymous();
+
+app.MapPost("/api/devices/fcm", async (
+    HttpContext context,
+    PushDeviceRegistrationRequest request,
+    AppDbContext db) =>
+{
+    var userIdValue = context.User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (!Guid.TryParse(userIdValue, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var token = request.Token?.Trim();
+    var platform = request.Platform?.Trim().ToLowerInvariant();
+    if (string.IsNullOrWhiteSpace(token) || token.Length > 4096 || platform != "android")
+    {
+        return Results.BadRequest(new { error = "A valid Android push token is required." });
+    }
+
+    var device = await db.PushDevices.SingleOrDefaultAsync(
+        candidate => candidate.PushToken == token,
+        context.RequestAborted);
+    if (device is null)
+    {
+        device = new PushDevice
+        {
+            UserId = userId,
+            Platform = platform,
+            PushToken = token
+        };
+        db.PushDevices.Add(device);
+    }
+    else
+    {
+        device.UserId = userId;
+        device.Platform = platform;
+        device.LastSeenAtUtc = DateTime.UtcNow;
+        device.IsActive = true;
+    }
+
+    await db.SaveChangesAsync(context.RequestAborted);
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapPost("/api/devices/fcm/unregister", async (
+    HttpContext context,
+    PushDeviceRegistrationRequest request,
+    AppDbContext db) =>
+{
+    var userIdValue = context.User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (!Guid.TryParse(userIdValue, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var token = request.Token?.Trim();
+    if (!string.IsNullOrWhiteSpace(token))
+    {
+        var devices = await db.PushDevices
+            .Where(device => device.UserId == userId && device.PushToken == token)
+            .ToListAsync(context.RequestAborted);
+        foreach (var device in devices)
+        {
+            device.IsActive = false;
+        }
+
+        await db.SaveChangesAsync(context.RequestAborted);
+    }
+
+    return Results.NoContent();
+}).RequireAuthorization();
 
 app.MapPost("/api/auth/change-password", async (HttpContext context, IAuthService authService) =>
 {
@@ -222,6 +337,8 @@ app.MapGet("/api/connection-details", (
         return Results.Problem(ex.Message);
     }
 }).RequireAuthorization();
+
+app.MapHub<CallInvitationHub>("/hubs/call-invitations").RequireAuthorization();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
