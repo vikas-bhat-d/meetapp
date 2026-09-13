@@ -715,3 +715,142 @@ body, html {
         grid-template-columns: 1fr;
     }
 }
+
+/* Phone layout */
+@media (max-width: 700px) {
+    .meet-container {
+        height: 100dvh;
+        min-height: 0;
+    }
+
+    .meet-header {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.6rem 0.75rem;
+    }
+
+    .meet-header-left {
+        min-width: 0;
+        flex: 1 1 auto;
+        gap: 0.5rem;
+    }
+
+    .room-badge {
+        min-width: 0;
+        max-width: 52vw;
+        overflow: hidden;
+        font-size: 0.9rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .meet-header > div:last-child {
+        flex: 0 0 auto;
+    }
+
+    .meet-stage {
+        min-height: 0;
+        padding: 0.5rem;
+        overflow: auto;
+    }
+
+    .livekit-video-grid {
+        width: 100%;
+        min-height: 0;
+        gap: 0.5rem;
+    }
+
+    /* Two participants get two large stacked video tiles on a phone. */
+    .livekit-video-grid.count-2 {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: repeat(2, minmax(0, 1fr));
+        max-width: none;
+        max-height: none;
+    }
+
+    .livekit-video-grid.count-2 .lk-participant-tile {
+        min-height: 0;
+        height: 100%;
+    }
+
+    /* Three or more participants use compact square tiles. */
+    .livekit-video-grid.count-4,
+    .livekit-video-grid.count-more {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: none;
+        grid-auto-rows: minmax(0, auto);
+        align-content: center;
+        height: auto;
+        max-width: none;
+        max-height: none;
+    }
+
+    .livekit-video-grid.count-4 .lk-participant-tile,
+    .livekit-video-grid.count-more .lk-participant-tile {
+        min-height: 0;
+        height: auto;
+        aspect-ratio: 1 / 1;
+    }
+
+    .lk-avatar-circle {
+        width: 52px;
+        height: 52px;
+        font-size: 1.35rem;
+    }
+
+    .lk-tile-footer {
+        right: 0.35rem;
+        bottom: 0.35rem;
+        left: 0.35rem;
+        max-width: calc(100% - 0.7rem);
+        padding: 0.25rem 0.4rem;
+        font-size: 0.7rem;
+    }
+
+    .meet-controls {
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        padding: 0.6rem 0.5rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+    }
+
+    .control-btn,
+    .control-btn.btn-leave {
+        flex: 1 1 calc(33.333% - 0.45rem);
+        min-width: 0;
+        height: 58px;
+        padding: 0.3rem 0.2rem;
+        font-size: 0.68rem;
+    }
+
+    .control-icon {
+        font-size: 1.15rem;
+    }
+
+    .meet-drawer {
+        top: 0;
+        bottom: 0;
+        width: min(88vw, 340px);
+    }
+
+    .modal-backdrop {
+        align-items: flex-end;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    .modal-card {
+        width: calc(100% - 1rem);
+        max-height: 86dvh;
+        overflow-y: auto;
+        padding: 1rem;
+    }
+
+    /* Keep the normal application pages usable with the WebView's narrow width. */
+    .page main {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .page .content {
+        padding: 0.75rem !important;
+    }
+}

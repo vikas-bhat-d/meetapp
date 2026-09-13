@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Linking,
   PermissionsAndroid,
   Platform,
@@ -176,6 +177,7 @@ export default function App() {
   const [serverUrlDraft, setServerUrlDraft] = useState(DEFAULT_SERVER_URL);
   const [configurationReady, setConfigurationReady] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState(DEFAULT_SERVER_URL);
   const [pushToken, setPushToken] = useState<string | null>(null);
@@ -219,6 +221,24 @@ export default function App() {
       requestMediaAccess().catch(() => undefined);
     }
   }, [requestMediaAccess]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (showSettings) {
+        setShowSettings(false);
+        return true;
+      }
+
+      if (canGoBack) {
+        webViewRef.current?.goBack();
+        return true;
+      }
+
+      return false;
+    });
+
+    return () => subscription.remove();
+  }, [canGoBack, showSettings]);
 
   useEffect(() => {
     let active = true;
@@ -352,7 +372,8 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [pushRegistrationScript]);
 
-  const handleNavigation = (_navigation: WebViewNavigation) => {
+  const handleNavigation = (navigation: WebViewNavigation) => {
+    setCanGoBack(navigation.canGoBack);
     setError(null);
     if (pushRegistrationScript) {
       webViewRef.current?.injectJavaScript(pushRegistrationScript);
@@ -438,7 +459,14 @@ export default function App() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <View style={styles.container}>
         <View style={styles.topBar}>
-          <Text style={styles.topBarTitle}>LiveKit Meet</Text>
+          <View style={styles.topBarLeading}>
+            {canGoBack && (
+              <Pressable style={styles.backButton} onPress={() => webViewRef.current?.goBack()}>
+                <Text style={styles.settingsButtonText}>‹ Back</Text>
+              </Pressable>
+            )}
+            <Text style={styles.topBarTitle}>LiveKit Meet</Text>
+          </View>
           <View style={styles.topBarActions}>
             {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
               <Pressable
@@ -586,6 +614,17 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700'
+  },
+  topBarLeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  backButton: {
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: 'rgba(16, 24, 42, 0.88)'
   },
   topBarActions: {
     flexDirection: 'row',
