@@ -32,7 +32,7 @@ type PushData = {
 const configuredServerUrl =
   process.env.EXPO_PUBLIC_SERVER_URL ??
   (Constants.expoConfig?.extra?.serverUrl as string | undefined) ??
-  'http://192.168.1.6:5189';
+    'https://192.168.1.6:8443';
 
 const SERVER_URL = configuredServerUrl.replace(/\/$/, '');
 

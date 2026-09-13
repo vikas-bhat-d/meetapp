@@ -1,0 +1,19 @@
+# HTTPS reverse proxy for the LAN development server.
+# The same HTTPS origin carries the website and LiveKit signaling WebSocket.
+
+https://192.168.1.6:8443 {
+    tls internal
+
+    # LiveKit client URLs become:
+    # wss://192.168.1.6:8443/livekit/rtc
+    @livekit path /livekit /livekit/*
+    handle @livekit {
+        uri strip_prefix /livekit
+        reverse_proxy 127.0.0.1:7880
+    }
+
+    # ASP.NET/Blazor/SignalR application.
+    handle {
+        reverse_proxy 127.0.0.1:5189
+    }
+}

@@ -1,10 +1,12 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 using livekitmeet.Components;
 using livekitmeet.Data;
 using livekitmeet.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +20,11 @@ builder.Services.AddSignalR();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Add(IPAddress.Loopback);
+});
 
 var databaseProvider = builder.Configuration["Database:Provider"]?.Trim().ToLowerInvariant() ?? "sqlite";
 var connectionString = builder.Configuration["Database:ConnectionString"] ??
@@ -146,6 +153,9 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
+
+// Caddy terminates HTTPS and forwards traffic to the local ASP.NET process.
+app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {
