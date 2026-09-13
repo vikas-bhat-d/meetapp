@@ -1,0 +1,2 @@
+# Never upload the Firebase Admin SDK private key to EAS.
+firebase-service-account.json

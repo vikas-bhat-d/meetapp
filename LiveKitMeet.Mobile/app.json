@@ -1,13 +1,14 @@
 {
   "expo": {
     "name": "LiveKit Meet",
-    "slug": "livekit-meet-mobile",
+    "slug": "meet",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "livekitmeet",
     "plugins": [
       "expo-notifications",
+      "./plugins/withUserCaTrust",
       [
         "expo-build-properties",
         {
@@ -27,7 +28,11 @@
       ]
     },
     "extra": {
-      "serverUrl": "https://192.168.1.6:8443"
-    }
+      "serverUrl": "https://192.168.1.6:8443",
+      "eas": {
+        "projectId": "d645658a-689a-4bc1-b885-1f3a3f2cf016"
+      }
+    },
+    "owner": "vikad_bhat_d"
   }
 }
