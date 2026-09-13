@@ -13,6 +13,50 @@ window.livekitBridge = {
     participants: new Map(), // identity -> { participant, tileEl, videoEl, avatarEl, micEl }
 
     /**
+     * Acquire one microphone track and let LiveKit publish that same track.
+     * Opening a probe stream and then opening the microphone again can make
+     * Android WebView report "Could not start audio source".
+     */
+    async _createMicrophoneTrack() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Microphone capture is not available in this WebView.');
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaTrack = stream.getAudioTracks()[0];
+        if (!mediaTrack) {
+            stream.getTracks().forEach(track => track.stop());
+            throw new Error('The WebView did not return a microphone track.');
+        }
+
+        const LocalAudioTrack = window.LivekitClient.LocalAudioTrack;
+        if (!LocalAudioTrack) {
+            mediaTrack.stop();
+            throw new Error('LiveKit microphone track support is not available.');
+        }
+
+        return new LocalAudioTrack(mediaTrack);
+    },
+
+    _notifyMediaError(mediaType, error) {
+        const message = error && error.message ? error.message : String(error);
+        console.warn(`[LiveKitBridge] Could not enable ${mediaType}:`, message);
+        window.ReactNativeWebView?.postMessage(JSON.stringify({
+            type: 'media-error',
+            mediaType,
+            message
+        }));
+        this.dotNetRef?.invokeMethodAsync('OnMediaError', mediaType, message).catch(() => undefined);
+    },
+
+    async _publishMicrophoneTrack(participant) {
+        const microphoneTrack = await this._createMicrophoneTrack();
+        const microphoneSource = window.LivekitClient.Track?.Source?.Microphone;
+        const publishOptions = microphoneSource ? { source: microphoneSource } : undefined;
+        await participant.publishTrack(microphoneTrack, publishOptions);
+    },
+
+    /**
      * Join a LiveKit room
      */
     async joinRoom(containerId, serverUrl, token, dotNetHelper, userChoices) {
@@ -78,9 +122,9 @@ window.livekitBridge = {
             }
             if (userChoices && userChoices.audioEnabled) {
                 try {
-                    await room.localParticipant.setMicrophoneEnabled(true);
+                    await this._publishMicrophoneTrack(room.localParticipant);
                 } catch (e) {
-                    console.warn('[LiveKitBridge] Could not enable microphone:', e);
+                    this._notifyMediaError('microphone', e);
                 }
             }
 
@@ -404,7 +448,16 @@ window.livekitBridge = {
         if (!this.activeRoom) return false;
         const local = this.activeRoom.localParticipant;
         const newState = !local.isMicrophoneEnabled;
-        await local.setMicrophoneEnabled(newState);
+        try {
+            if (newState) {
+                await this._publishMicrophoneTrack(local);
+            } else {
+                await local.setMicrophoneEnabled(false);
+            }
+        } catch (e) {
+            this._notifyMediaError('microphone', e);
+            throw e;
+        }
 
         const info = this.participants.get(local.identity);
         if (info && info.micEl) {

@@ -24,6 +24,7 @@
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
         "POST_NOTIFICATIONS"
       ]
     },

@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   PermissionsAndroid,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +15,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { WebView, WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -117,15 +118,53 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
   return typeof nativeToken.data === 'string' ? nativeToken.data : null;
 }
 
-async function requestMediaPermissionsAsync(): Promise<void> {
-  if (Platform.OS !== 'android' || Platform.Version < 23) {
-    return;
+type MediaPermissionStatus = 'granted' | 'denied' | 'blocked';
+
+type MediaPermissionResult = {
+  camera: MediaPermissionStatus;
+  microphone: MediaPermissionStatus;
+};
+
+function toMediaPermissionStatus(value: string): MediaPermissionStatus {
+  if (value === PermissionsAndroid.RESULTS.GRANTED) {
+    return 'granted';
   }
 
-  await PermissionsAndroid.requestMultiple([
+  if (value === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+    return 'blocked';
+  }
+
+  return 'denied';
+}
+
+async function requestMediaPermissionsAsync(): Promise<MediaPermissionResult> {
+  if (Platform.OS !== 'android' || Platform.Version < 23) {
+    return { camera: 'granted', microphone: 'granted' };
+  }
+
+  // Request these one at a time. Android can drop one of two simultaneous
+  // permission dialogs, which leaves WebView with camera but not microphone.
+  const cameraResult = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.CAMERA,
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-  ]);
+    {
+      title: 'Camera permission',
+      message: 'LiveKit Meet needs camera access for video meetings.',
+      buttonPositive: 'Allow'
+    }
+  );
+  const microphoneResult = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+    {
+      title: 'Microphone permission',
+      message: 'LiveKit Meet needs microphone access so other participants can hear you.',
+      buttonPositive: 'Allow'
+    }
+  );
+
+  return {
+    camera: toMediaPermissionStatus(cameraResult),
+    microphone: toMediaPermissionStatus(microphoneResult)
+  };
 }
 
 export default function App() {
@@ -143,6 +182,43 @@ export default function App() {
   const [fcmStatus, setFcmStatus] = useState('Requesting FCM token...');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mediaPermissions, setMediaPermissions] = useState<MediaPermissionResult>({
+    camera: Platform.OS === 'android' ? 'denied' : 'granted',
+    microphone: Platform.OS === 'android' ? 'denied' : 'granted'
+  });
+  const [mediaPermissionsChecked, setMediaPermissionsChecked] = useState(Platform.OS !== 'android');
+  const [isRequestingMediaPermissions, setIsRequestingMediaPermissions] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState<string | null>(null);
+
+  const requestMediaAccess = useCallback(async (): Promise<MediaPermissionResult> => {
+    setIsRequestingMediaPermissions(true);
+    try {
+      const result = await requestMediaPermissionsAsync();
+      setMediaPermissions(result);
+      return result;
+    } catch {
+      const result: MediaPermissionResult = { camera: 'denied', microphone: 'denied' };
+      setMediaPermissions(result);
+      return result;
+    } finally {
+      setMediaPermissionsChecked(true);
+      setIsRequestingMediaPermissions(false);
+    }
+  }, []);
+
+  const handleEnableMicrophone = useCallback(async () => {
+    setMicrophoneError(null);
+    const result = await requestMediaAccess();
+    if (result.microphone === 'blocked') {
+      await Linking.openSettings();
+    }
+  }, [requestMediaAccess]);
+
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      requestMediaAccess().catch(() => undefined);
+    }
+  }, [requestMediaAccess]);
 
   useEffect(() => {
     let active = true;
@@ -234,7 +310,6 @@ export default function App() {
   }, [serverUrl]);
 
   useEffect(() => {
-    requestMediaPermissionsAsync().catch(() => undefined);
     registerForPushNotificationsAsync()
       .then(token => {
         setPushToken(token);
@@ -290,7 +365,13 @@ export default function App() {
       const message = JSON.parse(event.nativeEvent.data) as {
         type?: string;
         status?: number;
+        mediaType?: string;
+        message?: string;
       };
+      if (message.type === 'media-error' && message.mediaType === 'microphone') {
+        setMicrophoneError(message.message ?? 'The WebView could not access the microphone.');
+        return;
+      }
       if (message.type === 'fcm-registration') {
         setFcmStatus(
           message.status === 204
@@ -327,16 +408,25 @@ export default function App() {
 
   if (!configurationReady) {
     return (
-      <SafeAreaView style={styles.centered}>
+      <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
         <ActivityIndicator size="large" color="#6f8cff" />
         <Text style={styles.errorText}>Loading app settings...</Text>
       </SafeAreaView>
     );
   }
 
+  if (!mediaPermissionsChecked) {
+    return (
+      <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
+        <ActivityIndicator size="large" color="#6f8cff" />
+        <Text style={styles.errorText}>Requesting camera and microphone permission...</Text>
+      </SafeAreaView>
+    );
+  }
+
   if (error) {
     return (
-      <SafeAreaView style={styles.centered}>
+      <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
         <Text style={styles.errorTitle}>Unable to open LiveKit Meet</Text>
         <Text style={styles.errorText}>{error}</Text>
         <Text style={styles.errorText}>Server: {serverUrl}</Text>
@@ -345,23 +435,39 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {isLoading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#6f8cff" />
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <View style={styles.container}>
+        <View style={styles.topBar}>
+          <Text style={styles.topBarTitle}>LiveKit Meet</Text>
+          <View style={styles.topBarActions}>
+            {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
+              <Pressable
+                style={styles.microphoneButton}
+                onPress={handleEnableMicrophone}
+                disabled={isRequestingMediaPermissions}
+              >
+                <Text style={styles.settingsButtonText}>
+                  {isRequestingMediaPermissions ? 'Checking mic...' : 'Enable microphone'}
+                </Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.settingsButton} onPress={() => {
+              setServerUrlDraft(serverUrl);
+              setSettingsMessage(null);
+              setShowSettings(true);
+            }}>
+              <Text style={styles.settingsButtonText}>Settings</Text>
+            </Pressable>
+          </View>
         </View>
-      )}
-      <View style={styles.pushStatus}>
-        <Text style={styles.pushStatusText}>{fcmStatus}</Text>
-      </View>
-      <Pressable style={styles.settingsButton} onPress={() => {
-        setServerUrlDraft(serverUrl);
-        setSettingsMessage(null);
-        setShowSettings(true);
-      }}>
-        <Text style={styles.settingsButtonText}>Settings</Text>
-      </Pressable>
-      <WebView
+        <View style={styles.webViewContainer}>
+          {isLoading && (
+            <View style={styles.loadingOverlay}>
+              <ActivityIndicator size="large" color="#6f8cff" />
+            </View>
+          )}
+          <WebView
+        style={styles.webView}
         ref={webViewRef}
         source={{ uri: currentUrl }}
         javaScriptEnabled
@@ -370,17 +476,15 @@ export default function App() {
         thirdPartyCookiesEnabled
         mediaPlaybackRequiresUserAction={false}
         allowsInlineMediaPlayback
-        mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
+        mediaCapturePermissionGrantType="grant"
         originWhitelist={['http://*', 'https://*']}
         onMessage={handleWebViewMessage}
         onLoadStart={() => {
-          setIsLoading(true);
-          if (loadFallbackTimerRef.current) {
-            clearTimeout(loadFallbackTimerRef.current);
+          // Blazor/LiveKit navigation can fire load events after the room is
+          // already usable. Do not put the native overlay back over a live room.
+          if (!hasLoadedDocumentRef.current) {
+            setIsLoading(true);
           }
-          loadFallbackTimerRef.current = setTimeout(() => {
-            setIsLoading(false);
-          }, 10000);
         }}
         onLoadProgress={event => {
           if (event.nativeEvent.progress >= 0.5) {
@@ -404,7 +508,20 @@ export default function App() {
           setIsLoading(false);
           setError(event.nativeEvent.description || 'The server could not be reached.');
         }}
-      />
+          />
+          <View style={styles.pushStatus}>
+            <Text style={styles.pushStatusText}>{fcmStatus}</Text>
+          </View>
+          {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
+            <Pressable style={styles.microphoneWarning} onPress={handleEnableMicrophone}>
+              <Text style={styles.microphoneWarningText}>
+                {microphoneError
+                  ? `Microphone could not start: ${microphoneError}`
+                  : 'Microphone access is off. Tap here to enable it.'}
+              </Text>
+            </Pressable>
+          )}
+        </View>
       {showSettings && (
         <View style={styles.settingsOverlay}>
           <View style={styles.settingsCard}>
@@ -442,18 +559,49 @@ export default function App() {
           </View>
         </View>
       )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#10182a'
+  },
   container: {
     flex: 1,
     backgroundColor: '#10182a'
   },
+  topBar: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#10182a'
+  },
+  topBarTitle: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  topBarActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  webViewContainer: {
+    position: 'relative',
+    flex: 1
+  },
+  webView: {
+    flex: 1
+  },
   loadingOverlay: {
     position: 'absolute',
-    zIndex: 1,
+    zIndex: 10,
     top: 0,
     right: 0,
     bottom: 0,
@@ -479,14 +627,32 @@ const styles = StyleSheet.create({
     textAlign: 'center'
   },
   settingsButton: {
-    position: 'absolute',
-    zIndex: 3,
-    top: 10,
-    right: 10,
     paddingVertical: 7,
     paddingHorizontal: 10,
     borderRadius: 6,
     backgroundColor: 'rgba(16, 24, 42, 0.88)'
+  },
+  microphoneButton: {
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#a94b3e'
+  },
+  microphoneWarning: {
+    position: 'absolute',
+    zIndex: 3,
+    right: 10,
+    bottom: 46,
+    left: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#8f3f35'
+  },
+  microphoneWarningText: {
+    color: '#ffffff',
+    fontSize: 12,
+    textAlign: 'center'
   },
   settingsButtonText: {
     color: '#ffffff',

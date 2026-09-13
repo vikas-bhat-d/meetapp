@@ -417,6 +417,18 @@ else
     }
 
     [JSInvokable]
+    public void OnMediaError(string mediaType, string message)
+    {
+        if (string.Equals(mediaType, "microphone", StringComparison.OrdinalIgnoreCase))
+        {
+            connectionStatus = "Microphone unavailable";
+        }
+
+        Console.WriteLine($"[Room] {mediaType} error: {message}");
+        StateHasChanged();
+    }
+
+    [JSInvokable]
     public void OnDisconnected()
     {
         connectionStatus = "Disconnected";
