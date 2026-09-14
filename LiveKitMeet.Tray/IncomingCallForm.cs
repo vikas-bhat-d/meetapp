@@ -1,7 +1,11 @@
+using System.Media;
+
 namespace LiveKitMeet.Tray;
 
 public sealed class IncomingCallForm : Form
 {
+    private readonly System.Windows.Forms.Timer _ringTimer = new() { Interval = 1200 };
+
     public IncomingCallForm(CallInvitationMessage invitation)
     {
         Text = "Incoming LiveKit call";
@@ -42,5 +46,19 @@ public sealed class IncomingCallForm : Form
         Controls.AddRange(new Control[] { title, caller, media, accept, decline });
         AcceptButton = accept;
         CancelButton = decline;
+
+        _ringTimer.Tick += (_, _) => SystemSounds.Exclamation.Play();
+        FormClosed += (_, _) =>
+        {
+            _ringTimer.Stop();
+            _ringTimer.Dispose();
+        };
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        SystemSounds.Exclamation.Play();
+        _ringTimer.Start();
     }
 }

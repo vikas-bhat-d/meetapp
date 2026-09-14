@@ -7,6 +7,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusItem;
+    private readonly ToolStripMenuItem _openMeetItem;
     private readonly ToolStripMenuItem _signInItem;
     private readonly ToolStripMenuItem _signOutItem;
     private readonly TraySettings _settings;
@@ -20,12 +21,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         _settings = TraySettings.Load();
 
         _statusItem = new ToolStripMenuItem("Not connected") { Enabled = false };
+        _openMeetItem = new ToolStripMenuItem("Open Meet", null, (_, _) => ShowMeetBrowser());
         _signInItem = new ToolStripMenuItem("Sign in...", null, (_, _) => ShowLogin());
         _signOutItem = new ToolStripMenuItem("Sign out", null, (_, _) => SignOut()) { Enabled = false };
         var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
+        menu.Items.Add(_openMeetItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_signInItem);
         menu.Items.Add(_signOutItem);
@@ -39,7 +42,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true
         };
-        _notifyIcon.DoubleClick += (_, _) => ShowLogin();
+        _notifyIcon.DoubleClick += (_, _) => ShowMeetBrowser();
 
         if (!string.IsNullOrWhiteSpace(_settings.GetRefreshToken()))
         {
@@ -142,7 +145,28 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
+        OpenInBrowser(uri.ToString());
+    }
+
+    private void ShowMeetBrowser()
+    {
+        OpenInBrowser(_settings.ServerUrl);
+    }
+
+    private static void OpenInBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"The meeting page could not be opened.\r\n\r\n{ex.Message}",
+                "LiveKit Meet",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     private void SignOut()

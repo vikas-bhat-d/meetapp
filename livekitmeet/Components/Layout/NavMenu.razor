@@ -1,40 +1,63 @@
-<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">livekitmeet</a>
+<div class="app-nav">
+    <div class="nav-header">
+        <a class="brand-link" href="/" @onclick="CloseMenu">
+            <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M7 5.5v13l11-6.5L7 5.5Z" /></svg>
+            </span>
+            <span class="brand-copy">
+                <strong>LiveKit Meet</strong>
+                <small>Workspace</small>
+            </span>
+        </a>
+        <button type="button" class="navbar-toggler" @onclick="ToggleMenu" aria-expanded="@isMenuOpen" aria-controls="primary-navigation" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </div>
+
+    @if (isMenuOpen)
+    {
+        <button type="button" class="nav-menu-backdrop" @onclick="CloseMenu" aria-label="Close navigation"></button>
+    }
+
+    <div id="primary-navigation" class="nav-scrollable @(isMenuOpen ? "is-open" : "")">
+        <nav class="nav-list" aria-label="Primary navigation">
+            <AuthorizeView>
+                <Authorized>
+                    <div class="nav-section-label">Workspace</div>
+                    <NavLink class="nav-link" href="/" Match="NavLinkMatch.All" @onclick="CloseMenu">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 10 8-6 8 6v9H4v-9Z" /><path d="M9 19v-5h6v5" /></svg>
+                        <span>Home</span>
+                    </NavLink>
+                    <NavLink class="nav-link" href="/profile" @onclick="CloseMenu">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" /></svg>
+                        <span>My profile</span>
+                    </NavLink>
+                    <AuthorizeView Roles="Admin" Context="adminContext">
+                        <NavLink class="nav-link" href="/admin/users" @onclick="CloseMenu">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16M4 12h16" /></svg>
+                            <span>User administration</span>
+                        </NavLink>
+                    </AuthorizeView>
+
+                    <div class="nav-section-label nav-section-label-spaced">Account</div>
+                    <form method="post" action="/api/auth/logout" class="sign-out-form">
+                        <button type="submit" class="nav-link nav-button" @onclick="CloseMenu">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>
+                            <span>Sign out</span>
+                        </button>
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        </nav>
     </div>
 </div>
 
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+@code {
+    private bool isMenuOpen;
 
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="flex-column">
-        <AuthorizeView>
-            <Authorized>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                        <span aria-hidden="true">🏠</span> Home
-                    </NavLink>
-                </div>
-                <div class="nav-item px-3">
-                    <NavLink class="nav-link" href="profile">
-                        <span aria-hidden="true">👤</span> My profile
-                    </NavLink>
-                </div>
-                <AuthorizeView Roles="Admin" Context="adminContext">
-                    <div class="nav-item px-3">
-                        <NavLink class="nav-link" href="admin/users">
-                            <span aria-hidden="true">⚙️</span> User administration
-                        </NavLink>
-                    </div>
-                </AuthorizeView>
-                <div class="nav-item px-3">
-                    <form method="post" action="/api/auth/logout">
-                        <button type="submit" class="nav-link nav-button">
-                            <span aria-hidden="true">↪</span> Sign out
-                        </button>
-                    </form>
-                </div>
-            </Authorized>
-        </AuthorizeView>
-    </nav>
-</div>
+    private void ToggleMenu() => isMenuOpen = !isMenuOpen;
+
+    private void CloseMenu() => isMenuOpen = false;
+}

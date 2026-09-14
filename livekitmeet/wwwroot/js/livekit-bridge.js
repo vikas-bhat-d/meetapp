@@ -50,7 +50,17 @@ window.livekitBridge = {
             mediaType,
             message
         }));
-        this.dotNetRef?.invokeMethodAsync('OnMediaError', mediaType, message).catch(() => undefined);
+        this._invokeDotNet('OnMediaError', mediaType, message);
+    },
+
+    async _invokeDotNet(methodName, ...args) {
+        if (!this.dotNetRef) return;
+
+        try {
+            await this.dotNetRef.invokeMethodAsync(methodName, ...args);
+        } catch (error) {
+            console.debug(`[LiveKitBridge] Ignoring ${methodName} callback after the page closed.`, error);
+        }
     },
 
     async _publishMicrophoneTrack(participant) {
@@ -114,7 +124,13 @@ window.livekitBridge = {
             if (!audioCont) {
                 audioCont = document.createElement('div');
                 audioCont.id = 'lk-audio-container';
-                audioCont.style.display = 'none';
+                audioCont.style.position = 'fixed';
+                audioCont.style.width = '1px';
+                audioCont.style.height = '1px';
+                audioCont.style.overflow = 'hidden';
+                audioCont.style.opacity = '0';
+                audioCont.style.pointerEvents = 'none';
+                audioCont.setAttribute('aria-hidden', 'true');
                 document.body.appendChild(audioCont);
             }
             audioCont.innerHTML = '';
@@ -175,12 +191,12 @@ window.livekitBridge = {
             this._notifyParticipants();
 
             if (this.dotNetRef) {
-                await this.dotNetRef.invokeMethodAsync(
+                await this._invokeDotNet(
                     'OnRoomConnected',
                     room.name,
                     room.localParticipant.identity
                 );
-                await this.dotNetRef.invokeMethodAsync(
+                await this._invokeDotNet(
                     'OnTrackStateChanged',
                     this.microphoneEnabled,
                     room.localParticipant.isCameraEnabled
@@ -191,7 +207,7 @@ window.livekitBridge = {
         } catch (error) {
             console.error('[LiveKitBridge] Error joining room:', error);
             if (this.dotNetRef) {
-                this.dotNetRef.invokeMethodAsync('OnConnectionError', error.message || error.toString());
+                await this._invokeDotNet('OnConnectionError', error.message || error.toString());
             }
             return { success: false, error: error.message };
         }
@@ -277,7 +293,7 @@ window.livekitBridge = {
         room.on(LK.RoomEvent.Disconnected, () => {
             console.log('[LiveKitBridge] Room disconnected.');
             if (this.dotNetRef) {
-                this.dotNetRef.invokeMethodAsync('OnDisconnected');
+                this._invokeDotNet('OnDisconnected');
             }
         });
     },
@@ -285,6 +301,12 @@ window.livekitBridge = {
     /**
      * Create isolated participant tile DOM
      */
+    _getMicrophoneIcon(isEnabled) {
+        return isEnabled
+            ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg>'
+            : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3ZM5 5l14 14"/><path d="M5 11a7 7 0 0 0 11.5 5.4M12 18v3M8 21h8"/></svg>';
+    },
+
     _createParticipantTile(participant, isLocal) {
         if (!this.gridContainer) return;
         if (this.participants.has(participant.identity)) return;
@@ -326,7 +348,7 @@ window.livekitBridge = {
 
         const micSpan = document.createElement('span');
         micSpan.className = 'lk-mic-status unmuted';
-        micSpan.innerHTML = '🎤';
+        micSpan.innerHTML = this._getMicrophoneIcon(true);
 
         footer.appendChild(nameSpan);
         footer.appendChild(micSpan);
@@ -372,10 +394,16 @@ window.livekitBridge = {
             }
         } else if (track.kind === 'audio') {
             const audioEl = track.attach();
+            audioEl.autoplay = true;
+            audioEl.muted = false;
+            audioEl.setAttribute('playsinline', '');
             audioEl.dataset.participant = participant.identity;
             if (this.audioContainer) {
                 this.audioContainer.appendChild(audioEl);
             }
+            audioEl.play?.().catch(error => {
+                console.debug('[LiveKitBridge] Remote audio playback is waiting for browser permission.', error);
+            });
         }
     },
 
@@ -416,7 +444,7 @@ window.livekitBridge = {
         } else if (publication.kind === 'audio') {
             if (partInfo.micEl) {
                 partInfo.micEl.className = `lk-mic-status ${isMuted ? 'muted' : 'unmuted'}`;
-                partInfo.micEl.innerHTML = isMuted ? '🔇' : '🎤';
+                partInfo.micEl.innerHTML = this._getMicrophoneIcon(!isMuted);
             }
         }
     },
@@ -457,7 +485,7 @@ window.livekitBridge = {
                 isSpeaking: info.tileEl ? info.tileEl.classList.contains('speaking') : false
             });
         });
-        this.dotNetRef.invokeMethodAsync('OnParticipantsUpdated', list);
+        this._invokeDotNet('OnParticipantsUpdated', list);
     },
 
     /**
@@ -466,7 +494,7 @@ window.livekitBridge = {
     _updateLocalState() {
         if (!this.dotNetRef || !this.activeRoom) return;
         const local = this.activeRoom.localParticipant;
-        this.dotNetRef.invokeMethodAsync(
+        this._invokeDotNet(
             'OnTrackStateChanged',
             this.microphoneEnabled,
             local.isCameraEnabled
@@ -495,7 +523,7 @@ window.livekitBridge = {
         const info = this.participants.get(local.identity);
         if (info && info.micEl) {
             info.micEl.className = `lk-mic-status ${this.microphoneEnabled ? 'unmuted' : 'muted'}`;
-            info.micEl.innerHTML = this.microphoneEnabled ? '🎤' : '🔇';
+            info.micEl.innerHTML = this._getMicrophoneIcon(this.microphoneEnabled);
         }
 
         this._updateLocalState();

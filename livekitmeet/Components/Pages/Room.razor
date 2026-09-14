@@ -13,49 +13,56 @@
 @if (needsPreJoin)
 {
     <div class="lobby-container">
-        <div class="lobby-card">
-            <h1 class="lobby-title">Join Room: @RoomName</h1>
+        <section class="lobby-card">
+            <div class="lobby-brand">
+                <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 5.5v13l11-6.5L7 5.5Z" /></svg></span>
+                <span>LiveKit Meet</span>
+            </div>
+            <span class="eyebrow">Ready to join</span>
+            <h1 class="lobby-title">Join @RoomName</h1>
             <p class="lobby-subtitle">You will join as <strong>@participantName</strong>.</p>
 
-            <form @onsubmit="StartJoin">
-                <div class="form-group" style="display: flex; gap: 1.5rem; margin: 1.5rem 0;">
-                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" @bind="isAudioEnabled" />
-                        <span>Microphone</span>
+            <form class="prejoin-form" @onsubmit="StartJoin" @onsubmit:preventDefault="true">
+                <div class="prejoin-options">
+                    <label class="media-option">
+                        <input class="media-option-input" type="checkbox" @bind="isAudioEnabled" />
+                        <span class="media-option-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg></span>
+                        <span><strong>Microphone</strong><small>@(isAudioEnabled ? "On" : "Off")</small></span>
                     </label>
-                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
-                        <input type="checkbox" @bind="isVideoEnabled" />
-                        <span>Camera</span>
+                    <label class="media-option">
+                        <input class="media-option-input" type="checkbox" @bind="isVideoEnabled" />
+                        <span class="media-option-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9Z" /><path d="m16 10 4-2v8l-4-2" /></svg></span>
+                        <span><strong>Camera</strong><small>@(isVideoEnabled ? "On" : "Off")</small></span>
                     </label>
                 </div>
 
-                <button type="submit" class="btn-primary" disabled="@string.IsNullOrWhiteSpace(participantName)">
-                    Enter Room
+                <button type="submit" class="btn-primary join-submit" disabled="@string.IsNullOrWhiteSpace(participantName)">
+                    <span>Enter room</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                 </button>
             </form>
-        </div>
+        </section>
     </div>
 }
 else
 {
     <div class="meet-container">
-        <!-- Top Header (Blazor Managed) -->
         <header class="meet-header">
             <div class="meet-header-left">
                 <div class="room-badge">
-                    <span>📡</span>
+                    <span class="room-badge-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" /><path d="m10 9 5 3-5 3V9Z" /></svg></span>
                     <span>@RoomName</span>
                 </div>
                 <span class="connection-status @GetStatusCssClass()">@connectionStatus</span>
             </div>
 
-            <div style="display: flex; align-items: center; gap: 0.75rem;">
-                <button class="header-btn" @onclick="() => showInviteModal = true">
-                    <span>➕</span>
+            <div class="meet-header-actions">
+                <button type="button" class="header-btn" @onclick="() => showInviteModal = true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
                     <span>Invite</span>
                 </button>
-                <button class="header-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer">
-                    <span>👥</span>
+                <button type="button" class="header-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer" aria-label="Toggle participants">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.8M17 14a5 5 0 0 1 3.5 5" /></svg>
                     <span>@participants.Count</span>
                 </button>
             </div>
@@ -66,48 +73,88 @@ else
             <div id="livekit-video-grid" class="livekit-video-grid"></div>
         </main>
 
-        <!-- Bottom Controls Toolbar (Blazor Managed) -->
         <footer class="meet-controls">
-            <!-- Audio Toggle -->
-            <button class="control-btn @(!isAudioEnabled ? "active-off" : "")" @onclick="ToggleAudioAsync" title="@(isAudioEnabled ? "Mute Microphone" : "Unmute Microphone")">
-                <span class="control-icon">@(isAudioEnabled ? "🎤" : "🔇")</span>
-                <span>@(isAudioEnabled ? "Mute" : "Unmute")</span>
+            <button type="button" class="control-btn @(!isAudioEnabled ? "active-off" : "")" @onclick="ToggleAudioAsync" title="@(isAudioEnabled ? "Mute microphone" : "Unmute microphone")" aria-label="@(isAudioEnabled ? "Mute microphone" : "Unmute microphone")">
+                <span class="control-icon" aria-hidden="true">
+                    @if (isAudioEnabled)
+                    {
+                        <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
+                    }
+                    else
+                    {
+                        <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3ZM5 5l14 14" /><path d="M5 11a7 7 0 0 0 11.5 5.4M12 18v3M8 21h8" /></svg>
+                    }
+                </span>
+                <span class="control-label">@(isAudioEnabled ? "Mute" : "Unmute")</span>
             </button>
 
-            <!-- Video Toggle -->
-            <button class="control-btn @(!isVideoEnabled ? "active-off" : "")" @onclick="ToggleVideoAsync" title="@(isVideoEnabled ? "Turn Off Camera" : "Turn On Camera")">
-                <span class="control-icon">@(isVideoEnabled ? "📹" : "📷")</span>
-                <span>@(isVideoEnabled ? "Stop Cam" : "Start Cam")</span>
+            <button type="button" class="control-btn @(!isVideoEnabled ? "active-off" : "")" @onclick="ToggleVideoAsync" title="@(isVideoEnabled ? "Turn off camera" : "Turn on camera")" aria-label="@(isVideoEnabled ? "Turn off camera" : "Turn on camera")">
+                <span class="control-icon" aria-hidden="true">
+                    @if (isVideoEnabled)
+                    {
+                        <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9Z" /><path d="m16 10 4-2v8l-4-2" /></svg>
+                    }
+                    else
+                    {
+                        <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9ZM5 5l14 14" /><path d="m16 10 4-2v8l-4-2" /></svg>
+                    }
+                </span>
+                <span class="control-label">@(isVideoEnabled ? "Stop cam" : "Start cam")</span>
             </button>
 
-            <!-- Participants Drawer Toggle -->
-            <button class="control-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer" title="View Participants">
-                <span class="control-icon">👥</span>
-                <span>People (@participants.Count)</span>
+            <button type="button" class="control-btn" @onclick="() => showParticipantsDrawer = !showParticipantsDrawer" title="View participants" aria-label="View participants">
+                <span class="control-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.8M17 14a5 5 0 0 1 3.5 5" /></svg></span>
+                <span class="control-label">People (@participants.Count)</span>
             </button>
 
-            <!-- Ring / Invite Modal Toggle -->
-            <button class="control-btn btn-invite" @onclick="() => showInviteModal = true" title="Invite & Ring Participants">
-                <span class="control-icon">📞</span>
-                <span>Invite</span>
+            <button type="button" class="control-btn btn-invite" @onclick="() => showInviteModal = true" title="Invite participants" aria-label="Invite participants">
+                <span class="control-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a12 12 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1C10.7 20 4 13.3 4 5a1 1 0 0 1 1-1Z" /></svg></span>
+                <span class="control-label">Invite</span>
             </button>
 
-            <!-- Leave Room -->
-            <button class="control-btn btn-leave" @onclick="LeaveRoomAsync" title="Leave Meeting">
-                <span class="control-icon">🚪</span>
-                <span>Leave</span>
+            <button type="button" class="control-btn btn-leave" @onclick="LeaveRoomAsync" title="Leave meeting" aria-label="Leave meeting">
+                <span class="control-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 5H5v14h8M11 12h9M16 8l4 4-4 4" /></svg></span>
+                <span class="control-label">Leave</span>
             </button>
         </footer>
 
         <!-- Side Drawer: Participant List (Blazor Managed) -->
         @if (showParticipantsDrawer)
         {
-            <aside class="meet-drawer">
+            <button type="button" class="drawer-backdrop" @onclick="() => showParticipantsDrawer = false" aria-label="Close participants panel"></button>
+            <aside class="meet-drawer" aria-label="Participants">
                 <div class="drawer-header">
                     <h3 class="drawer-title">Participants (@participants.Count)</h3>
-                    <button class="drawer-close" @onclick="() => showParticipantsDrawer = false">✕</button>
+                    <button type="button" class="drawer-close" @onclick="() => showParticipantsDrawer = false" aria-label="Close participants panel">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
                 </div>
                 <div class="drawer-content">
+                    <section class="drawer-invite">
+                        <div class="drawer-invite-heading">
+                            <span class="drawer-invite-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+                            </span>
+                            <div>
+                                <h4>Invite by user ID</h4>
+                                <p>Type an account ID and press Enter.</p>
+                            </div>
+                        </div>
+                        <form class="drawer-invite-form" @onsubmit="RingParticipantAsync" @onsubmit:preventDefault="true">
+                            <label class="visually-hidden" for="drawerInviteUsername">User ID</label>
+                            <input id="drawerInviteUsername" class="form-input" @bind="inviteUsername" @bind:event="oninput" placeholder="e.g. alex" autocomplete="off" />
+                            <button type="submit" class="icon-text-button" disabled="@(string.IsNullOrWhiteSpace(inviteUsername) || isRinging)">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                                <span>@(isRinging ? "Sending" : "Invite")</span>
+                            </button>
+                        </form>
+                        @if (!string.IsNullOrEmpty(ringStatusMessage))
+                        {
+                            <p class="drawer-invite-status">@ringStatusMessage</p>
+                        }
+                    </section>
+
+                    <div class="drawer-section-label">In this room</div>
                     @foreach (var p in participants)
                     {
                         <div class="participant-item">
@@ -124,7 +171,9 @@ else
                                 </div>
                             </div>
                             <div>
-                                <span>@(p.IsAudioEnabled ? "🎤" : "🔇")</span>
+                                <span class="participant-audio-state @(p.IsAudioEnabled ? "is-enabled" : "is-muted")" aria-label="@(p.IsAudioEnabled ? "Microphone on" : "Microphone off")">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
+                                </span>
                             </div>
                         </div>
                     }
@@ -138,40 +187,35 @@ else
             <div class="modal-backdrop" @onclick="() => showInviteModal = false">
                 <div class="modal-card" @onclick:stopPropagation="true">
                     <h3 class="modal-title">Invite to Meeting</h3>
-                    <p style="color: var(--lk-text-secondary); font-size: 0.875rem; margin-bottom: 0.5rem;">
+                    <p class="modal-description">
                         Share this meeting link with others to invite them:
                     </p>
 
                     <div class="copy-input-group">
                         <input class="copy-input" readonly value="@GetShareableMeetingUrl()" />
-                        <button class="btn-primary" style="width: auto; padding: 0.6rem 1rem;" @onclick="CopyMeetingLinkAsync">
+                        <button type="button" class="btn-primary modal-copy-button" @onclick="CopyMeetingLinkAsync">
                             @(isCopied ? "Copied!" : "Copy")
                         </button>
                     </div>
 
-                    <hr style="border: 0; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 1.5rem 0;" />
+                    <hr class="modal-divider" />
 
-                    <!-- Ringing / Participant Invitation Controls (Ready for future backend signaling) -->
-                    <h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem;">Ring / Call Participant</h4>
-                    <p style="color: var(--lk-text-secondary); font-size: 0.8rem; margin-bottom: 0.75rem;">
-                        Enter a user identifier or username to ring them directly.
-                    </p>
+                    <h4 class="modal-section-title">Invite by user ID</h4>
+                    <p class="modal-description modal-description-small">Enter an account ID to send them this room invitation.</p>
 
-                    <div style="display: flex; gap: 0.5rem;">
-                        <input class="form-input" @bind="inviteUsername" placeholder="Enter username" style="flex: 1;" />
-                        <button class="btn-primary btn-invite" style="width: auto; padding: 0.6rem 1rem;" @onclick="RingParticipantAsync" disabled="@(string.IsNullOrWhiteSpace(inviteUsername) || isRinging)">
-                            @(isRinging ? "Ringing..." : "Ring")
+                    <form class="modal-invite-form" @onsubmit="RingParticipantAsync" @onsubmit:preventDefault="true">
+                        <input class="form-input" @bind="inviteUsername" @bind:event="oninput" placeholder="e.g. alex" autocomplete="off" />
+                        <button type="submit" class="btn-primary btn-invite" disabled="@(string.IsNullOrWhiteSpace(inviteUsername) || isRinging)">
+                            @(isRinging ? "Sending..." : "Send invite")
                         </button>
-                    </div>
+                    </form>
 
                     @if (!string.IsNullOrEmpty(ringStatusMessage))
                     {
-                        <div style="margin-top: 0.75rem; font-size: 0.85rem; color: #60a5fa;">
-                            @ringStatusMessage
-                        </div>
+                        <p class="modal-invite-status">@ringStatusMessage</p>
                     }
 
-                    <div style="margin-top: 1.5rem; text-align: right;">
+                    <div class="modal-actions">
                         <button class="btn-secondary" @onclick="() => showInviteModal = false">Close</button>
                     </div>
                 </div>
@@ -407,10 +451,11 @@ else
 
     private async Task RingParticipantAsync()
     {
-        if (string.IsNullOrWhiteSpace(inviteUsername)) return;
+        var invitee = inviteUsername.Trim();
+        if (string.IsNullOrWhiteSpace(invitee)) return;
 
         isRinging = true;
-        ringStatusMessage = $"Calling {inviteUsername}...";
+        ringStatusMessage = $"Sending an invitation to {invitee}...";
         StateHasChanged();
 
         try
@@ -418,15 +463,19 @@ else
             var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
             var result = await CallInvitationService.SendAsync(
                 authState.User,
-                inviteUsername,
+                invitee,
                 RoomName,
                 GetShareableMeetingUrl(),
                 isAudioEnabled,
                 isVideoEnabled);
 
             ringStatusMessage = result.Success
-                ? $"Invitation sent to '{inviteUsername}'."
+                ? $"Invitation sent to '{invitee}'."
                 : result.Error ?? "The invitation could not be sent.";
+            if (result.Success)
+            {
+                inviteUsername = string.Empty;
+            }
         }
         catch (Exception ex)
         {
@@ -453,28 +502,28 @@ else
     };
 
     [JSInvokable]
-    public void OnRoomConnected(string roomName, string identity)
+    public async Task OnRoomConnected(string roomName, string identity)
     {
         connectionStatus = "Connected";
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnConnectionStatusChanged(string status)
+    public async Task OnConnectionStatusChanged(string status)
     {
         connectionStatus = status;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnConnectionError(string message)
+    public async Task OnConnectionError(string message)
     {
         connectionStatus = "Error: " + message;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnMediaError(string mediaType, string message)
+    public async Task OnMediaError(string mediaType, string message)
     {
         if (string.Equals(mediaType, "microphone", StringComparison.OrdinalIgnoreCase))
         {
@@ -482,29 +531,29 @@ else
         }
 
         Console.WriteLine($"[Room] {mediaType} error: {message}");
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnDisconnected()
+    public async Task OnDisconnected()
     {
         connectionStatus = "Disconnected";
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnParticipantsUpdated(List<ParticipantDto> updatedList)
+    public async Task OnParticipantsUpdated(List<ParticipantDto> updatedList)
     {
         participants = updatedList ?? new();
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
-    public void OnTrackStateChanged(bool audio, bool video)
+    public async Task OnTrackStateChanged(bool audio, bool video)
     {
         isAudioEnabled = audio;
         isVideoEnabled = video;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     public async ValueTask DisposeAsync()

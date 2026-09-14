@@ -1,44 +1,62 @@
 @page "/"
 @attribute [Authorize]
-@layout EmptyLayout
+@layout MainLayout
 @rendermode InteractiveServer
 @inject NavigationManager Navigation
 
-<PageTitle>LiveKit Meet - Blazor</PageTitle>
+<PageTitle>Home - LiveKit Meet</PageTitle>
 
-<div class="lobby-container">
-    <div class="lobby-card">
-        <a href="/profile"> got to profile</a>
-        <h1 class="lobby-title">LiveKit Video Meet</h1>
-        <p class="lobby-subtitle">Audio & Video Conference with Blazor + LiveKit</p>
+<div class="home-page">
+    <header class="page-heading home-heading">
+        <div>
+            <span class="eyebrow">Workspace</span>
+            <h1>Start a meeting</h1>
+            <p>Open a room, choose your devices, and bring the conversation together.</p>
+        </div>
+        <a class="quiet-link" href="/profile">Manage profile <span aria-hidden="true">&rarr;</span></a>
+    </header>
 
-        <form @onsubmit="JoinMeeting">
-            <div class="form-group">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <label class="form-label" style="margin-bottom: 0;" for="roomName">Room Name</label>
-                    <button type="button" class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" @onclick="GenerateRandomRoom">
-                        Generate
-                    </button>
+    <section class="home-panel join-panel">
+            <div class="panel-heading">
+                <span class="panel-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z" /><path d="m9 12 3 2 3-2-3-2-3 2Z" /></svg>
+                </span>
+                <div>
+                    <h2>New room</h2>
+                    <p>Use a name your team will recognize.</p>
                 </div>
-                <input id="roomName" class="form-input" @bind="roomName" placeholder="e.g. daily-standup" required />
             </div>
 
-            <div class="form-group" style="display: flex; gap: 1.5rem; margin: 1.5rem 0;">
-                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
-                    <input type="checkbox" @bind="audioEnabled" />
-                    <span>Microphone On</span>
-                </label>
-                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer;">
-                    <input type="checkbox" @bind="videoEnabled" />
-                    <span>Camera On</span>
-                </label>
-            </div>
+            <form class="join-form" @onsubmit="JoinMeeting" @onsubmit:preventDefault="true">
+                <div class="form-group">
+                    <label class="form-label" for="roomName">Room name</label>
+                    <div class="room-input-wrap">
+                        <input id="roomName" class="form-input" @bind="roomName" placeholder="e.g. daily-standup" autocomplete="off" required />
+                        <button type="button" class="room-generate" @onclick="GenerateRandomRoom" aria-label="Generate a room name" title="Generate a room name">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.5 9A7 7 0 0 1 18.3 7L20 9M4 15l1.7 2A7 7 0 0 0 18.5 15" /></svg>
+                        </button>
+                    </div>
+                </div>
 
-            <button type="submit" class="btn-primary" disabled="@string.IsNullOrWhiteSpace(roomName)">
-                Join Meeting
-            </button>
-        </form>
-    </div>
+                <div class="media-choice-grid">
+                    <label class="media-choice">
+                        <input type="checkbox" @bind="audioEnabled" />
+                        <span class="media-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg></span>
+                        <span><strong>Microphone</strong><small>@(audioEnabled ? "On when you join" : "Off when you join")</small></span>
+                    </label>
+                    <label class="media-choice">
+                        <input type="checkbox" @bind="videoEnabled" />
+                        <span class="media-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h7A2.5 2.5 0 0 1 16 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 16.5v-9Z" /><path d="m16 10 4-2v8l-4-2" /></svg></span>
+                        <span><strong>Camera</strong><small>@(videoEnabled ? "On when you join" : "Off when you join")</small></span>
+                    </label>
+                </div>
+
+                <button type="submit" class="btn-primary join-submit" disabled="@string.IsNullOrWhiteSpace(roomName)">
+                    <span>Enter room</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                </button>
+            </form>
+        </section>
 </div>
 
 @code {

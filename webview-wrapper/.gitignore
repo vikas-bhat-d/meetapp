@@ -1,0 +1,45 @@
+## Visual Studio / C# WinForms .gitignore
+
+# Build output directories
+bin/
+obj/
+
+# Visual Studio local settings & cache
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Publish output
+publish/
+*.rar
+*.zip
+
+# NuGet packages
+packages/
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Temporary key files (auto-generated, should not be committed)
+*_TemporaryKey.pfx
+
+# Roslyn cache
+*.cache
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Recycle Bin
+$RECYCLE.BIN/
+
+# VS Code
+.vscode/
