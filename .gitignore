@@ -5,3 +5,4 @@ livekitmeet/*.db
 livekitmeet/*.db-shm
 livekitmeet/*.db-wal
 livekitmeet/appsettings.Development.json
+LiveKitMeet.Mobile/firebase-service-account.json
