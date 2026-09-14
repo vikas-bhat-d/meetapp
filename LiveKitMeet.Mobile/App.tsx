@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   Linking,
   PermissionsAndroid,
@@ -9,14 +10,133 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
+  Vibration,
+  NativeModules
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+import * as TaskManager from 'expo-task-manager';
 import { WebView, WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// ─── Background notification task ────────────────────────────────────────────
+// This task name MUST match what is passed to Notifications.registerTaskAsync.
+const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND_NOTIFICATION_TASK';
+const INCOMING_CALL_CATEGORY = 'INCOMING_CALL';
+const INCOMING_CALL_CHANNEL = 'incoming-calls-v2';
+
+type IncomingCallNativeModule = {
+  showIncomingCall: (callerName: string, roomName: string, roomUrl: string, invitationId: string) => void;
+  dismissIncomingCall: (invitationId: string) => void;
+};
+
+const incomingCallNativeModule = NativeModules.IncomingCall as IncomingCallNativeModule | undefined;
+
+type PushData = {
+  roomUrl?: string;
+  roomName?: string;
+  invitationId?: string;
+  fromDisplayName?: string;
+  fromUserName?: string;
+  callerDisplayName?: string;
+  [key: string]: unknown;
+};
+
+function parseBackgroundPushData(
+  taskData: Notifications.NotificationTaskPayload
+): Record<string, unknown> | null {
+  if ('actionIdentifier' in taskData) {
+    return null;
+  }
+
+  const dataString = taskData.data?.dataString;
+  if (typeof dataString === 'string') {
+    try {
+      const parsed = JSON.parse(dataString) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+// Register the task handler at module level (runs even when the app is killed).
+// When Android receives a data-only high-priority FCM message while the app is
+// in the background or killed, expo-notifications wakes the JS engine and
+// invokes this task.  We post a rich local notification with Accept / Decline
+// action buttons so the user can respond from the lock screen.
+TaskManager.defineTask<Notifications.NotificationTaskPayload>(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
+  if (error) {
+    console.warn('[BGTask] error', error);
+    return;
+  }
+
+  const payload = parseBackgroundPushData(data);
+  if (!payload) return;
+
+  if (payload.type === 'CANCEL_CALL') {
+    const notificationId = payload.invitationId ?? payload.callUUID;
+    if (typeof notificationId === 'string') {
+      try {
+        await incomingCallNativeModule?.dismissIncomingCall(notificationId);
+      } catch {
+        // The native full-screen module is unavailable in Expo Go.
+      }
+      await Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
+    }
+    return;
+  }
+
+  if (payload.type !== 'INCOMING_CALL') return;
+  if (AppState.currentState === 'active') return;
+
+  // The EAS Android build receives data-only FCM messages in the native
+  // FirebaseMessagingService, which launches the full-screen Activity. Do not
+  // also create an Expo notification for the same message.
+  if (Platform.OS === 'android') return;
+
+  const roomUrl = payload.roomUrl as string | undefined;
+  if (!roomUrl) return;
+
+  const callerName =
+    (payload.callerName as string | undefined) ??
+    (payload.fromDisplayName as string | undefined) ??
+    'Someone';
+  const roomName = (payload.roomName as string | undefined) ?? 'LiveKit meeting';
+  const notificationId =
+    (payload.invitationId as string | undefined) ??
+    (payload.callUUID as string | undefined) ??
+    `incoming-${Date.now()}`;
+
+  if (incomingCallNativeModule?.showIncomingCall) {
+    try {
+      await incomingCallNativeModule.showIncomingCall(callerName, roomName, roomUrl, notificationId);
+      return;
+    } catch {
+      // Fall back to an Expo notification when running without the native module.
+    }
+  }
+
+  // Post a local heads-up notification that shows Accept / Decline buttons.
+  await Notifications.scheduleNotificationAsync({
+    identifier: notificationId,
+    content: {
+      title: `Incoming call from ${callerName}`,
+      body: roomName,
+      data: payload,
+      categoryIdentifier: INCOMING_CALL_CATEGORY,
+      sound: 'default',
+    },
+    trigger: null, // fire immediately
+  });
+});
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -28,10 +148,9 @@ Notifications.setNotificationHandler({
   })
 });
 
-type PushData = {
-  roomUrl?: string;
-  roomName?: string;
-  invitationId?: string;
+type IncomingCall = PushData & {
+  title?: string;
+  body?: string;
 };
 
 const defaultServerUrl =
@@ -96,7 +215,9 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
   }
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('incoming-calls', {
+    // Use a new channel id so devices that previously created a silent
+    // incoming-calls channel receive the updated ringing settings.
+    await Notifications.setNotificationChannelAsync(INCOMING_CALL_CHANNEL, {
       name: 'Incoming calls',
       importance: Notifications.AndroidImportance.MAX,
       sound: 'default',
@@ -104,6 +225,30 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC
     });
   }
+
+  // Set up the notification category with Accept / Decline action buttons.
+  // These appear as tappable buttons on the incoming call notification when
+  // the app is in the background or killed.
+  await Notifications.setNotificationCategoryAsync(INCOMING_CALL_CATEGORY, [
+    {
+      identifier: 'ACCEPT_CALL',
+      buttonTitle: '✅ Accept',
+      options: {
+        opensAppToForeground: true,
+        isDestructive: false,
+        isAuthenticationRequired: false,
+      },
+    },
+    {
+      identifier: 'DECLINE_CALL',
+      buttonTitle: '❌ Decline',
+      options: {
+        opensAppToForeground: false,
+        isDestructive: true,
+        isAuthenticationRequired: false,
+      },
+    },
+  ]);
 
   const permissions = await Notifications.getPermissionsAsync();
   let finalStatus = permissions.status;
@@ -115,9 +260,22 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
     return null;
   }
 
+  // Register background task so expo-notifications wakes the JS engine when
+  // a data-only FCM message arrives while the app is killed/backgrounded.
+  try {
+    if (TaskManager.isTaskDefined(BACKGROUND_NOTIFICATION_TASK) &&
+        !(await TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK))) {
+      await Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
+    }
+  } catch (taskError) {
+    // Expo Go cannot run headless tasks, but it can still receive a push token.
+    console.warn('[Push] Background task registration unavailable:', taskError);
+  }
+
   const nativeToken = await Notifications.getDevicePushTokenAsync();
   return typeof nativeToken.data === 'string' ? nativeToken.data : null;
 }
+
 
 type MediaPermissionStatus = 'granted' | 'denied' | 'blocked';
 
@@ -191,6 +349,9 @@ export default function App() {
   const [mediaPermissionsChecked, setMediaPermissionsChecked] = useState(Platform.OS !== 'android');
   const [isRequestingMediaPermissions, setIsRequestingMediaPermissions] = useState(false);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const incomingCallRef = useRef<IncomingCall | null>(null);
+  const incomingNotificationIdRef = useRef<string | null>(null);
 
   const requestMediaAccess = useCallback(async (): Promise<MediaPermissionResult> => {
     setIsRequestingMediaPermissions(true);
@@ -329,6 +490,86 @@ export default function App() {
     }
   }, [serverUrl]);
 
+  const stopIncomingRing = useCallback(() => {
+    const invitationId = incomingCallRef.current?.invitationId;
+    if (Platform.OS === 'android') {
+      Vibration.cancel();
+    }
+    const notificationId = incomingNotificationIdRef.current;
+    incomingNotificationIdRef.current = null;
+    if (notificationId) {
+      Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
+    }
+    if (invitationId) {
+      try {
+        incomingCallNativeModule?.dismissIncomingCall(invitationId);
+      } catch {
+        // The native full-screen module is unavailable in Expo Go.
+      }
+    }
+    incomingCallRef.current = null;
+    setIncomingCall(null);
+  }, []);
+
+  const handleIncomingNotification = useCallback((notification: Notifications.Notification) => {
+    const content = notification.request.content;
+    const data = content.data as PushData | undefined;
+    if (data?.type === 'CANCEL_CALL') {
+      const invitationId = data.invitationId ?? data.callUUID;
+      if (typeof invitationId === 'string') {
+        try {
+          incomingCallNativeModule?.dismissIncomingCall(invitationId);
+        } catch {
+          // The native full-screen module is unavailable in Expo Go.
+        }
+      }
+      if (!incomingCallRef.current?.invitationId || incomingCallRef.current.invitationId === invitationId) {
+        stopIncomingRing();
+      }
+      return;
+    }
+    if (!data?.roomUrl) {
+      return;
+    }
+
+    incomingNotificationIdRef.current = notification.request.identifier;
+    const nextCall = {
+      ...data,
+      title: content.title ?? 'Incoming call',
+      body: content.body ?? 'Someone is inviting you to a meeting.'
+    };
+    incomingCallRef.current = nextCall;
+    setIncomingCall(nextCall);
+
+    // Keep ringing while the in-app answer card is visible. The notification
+    // channel also supplies the normal Android notification sound.
+    if (Platform.OS === 'android') {
+      Vibration.vibrate([0, 800, 600], true);
+    }
+  }, [stopIncomingRing]);
+
+  const acceptIncomingCall = useCallback(() => {
+    const call = incomingCall;
+    stopIncomingRing();
+    openNotificationRoom(call ?? undefined);
+  }, [incomingCall, openNotificationRoom, stopIncomingRing]);
+
+  const handleNotificationResponse = useCallback((response: Notifications.NotificationResponse) => {
+    const data = response.notification.request.content.data as PushData;
+    if (response.actionIdentifier === 'DECLINE_CALL') {
+      stopIncomingRing();
+      return;
+    }
+
+    if (response.actionIdentifier !== 'ACCEPT_CALL' &&
+        response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) {
+      return;
+    }
+
+    stopIncomingRing();
+    openNotificationRoom(data);
+  }, [openNotificationRoom, stopIncomingRing]);
+
   useEffect(() => {
     registerForPushNotificationsAsync()
       .then(token => {
@@ -340,24 +581,47 @@ export default function App() {
         setFcmStatus('FCM token unavailable');
       });
 
-    const receivedSubscription = Notifications.addNotificationReceivedListener(() => {
-      // The notification handler above displays the foreground notification.
+    const handleDeepLink = (deepLink: string | null) => {
+      if (!deepLink) return;
+      try {
+        let extracted: string | null = null;
+        try {
+          const parsed = new URL(deepLink);
+          extracted = parsed.searchParams.get('roomUrl');
+        } catch {
+          const match = deepLink.match(/[?&]roomUrl=([^&]+)/);
+          if (match && match[1]) {
+            extracted = decodeURIComponent(match[1]);
+          }
+        }
+        if (extracted) {
+          stopIncomingRing();
+          openNotificationRoom({ roomUrl: extracted });
+        }
+      } catch (_) {}
+    };
+
+    Linking.getInitialURL().then(handleDeepLink);
+    const linkingSubscription = Linking.addEventListener('url', event => {
+      handleDeepLink(event.url);
     });
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(response => {
-      openNotificationRoom(response.notification.request.content.data as PushData);
-    });
+
+    const receivedSubscription = Notifications.addNotificationReceivedListener(handleIncomingNotification);
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
 
     Notifications.getLastNotificationResponseAsync().then(response => {
       if (response) {
-        openNotificationRoom(response.notification.request.content.data as PushData);
+        handleNotificationResponse(response);
       }
     });
 
     return () => {
+      linkingSubscription.remove();
       receivedSubscription.remove();
       responseSubscription.remove();
+      stopIncomingRing();
     };
-  }, [openNotificationRoom]);
+  }, [handleIncomingNotification, handleNotificationResponse, stopIncomingRing]);
 
   useEffect(() => {
     if (!pushRegistrationScript) {
@@ -488,6 +752,26 @@ export default function App() {
             </Pressable>
           </View>
         </View>
+        {incomingCall && (
+          <View style={styles.incomingCallOverlay}>
+            <View style={styles.incomingCallCard}>
+              <Text style={styles.incomingCallEyebrow}>Incoming call</Text>
+              <Text style={styles.incomingCallTitle}>
+                {incomingCall.fromDisplayName ?? incomingCall.callerDisplayName ?? incomingCall.fromUserName ?? 'Someone'}
+              </Text>
+              <Text style={styles.incomingCallRoom}>{incomingCall.roomName ?? 'LiveKit meeting'}</Text>
+              <Text style={styles.incomingCallBody}>{incomingCall.body}</Text>
+              <View style={styles.incomingCallActions}>
+                <Pressable style={[styles.callActionButton, styles.declineCallButton]} onPress={stopIncomingRing}>
+                  <Text style={styles.callActionText}>Decline</Text>
+                </Pressable>
+                <Pressable style={[styles.callActionButton, styles.answerCallButton]} onPress={acceptIncomingCall}>
+                  <Text style={styles.callActionText}>Answer</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
         <View style={styles.webViewContainer}>
           {isLoading && (
             <View style={styles.loadingOverlay}>
@@ -630,6 +914,77 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8
+  },
+  incomingCallOverlay: {
+    position: 'absolute',
+    zIndex: 20,
+    top: 48,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    padding: 18,
+    backgroundColor: 'rgba(5, 10, 22, 0.78)'
+  },
+  incomingCallCard: {
+    width: '100%',
+    maxWidth: 420,
+    padding: 22,
+    borderRadius: 16,
+    backgroundColor: '#1c2940',
+    shadowColor: '#000000',
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8
+  },
+  incomingCallEyebrow: {
+    marginBottom: 8,
+    color: '#83a5ff',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase'
+  },
+  incomingCallTitle: {
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: '700'
+  },
+  incomingCallRoom: {
+    marginTop: 4,
+    color: '#d7def0',
+    fontSize: 15,
+    fontWeight: '600'
+  },
+  incomingCallBody: {
+    marginTop: 12,
+    color: '#aab6cf',
+    fontSize: 13,
+    lineHeight: 18
+  },
+  incomingCallActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 22,
+    gap: 10
+  },
+  callActionButton: {
+    minWidth: 100,
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8
+  },
+  declineCallButton: {
+    backgroundColor: '#8f3f35'
+  },
+  answerCallButton: {
+    backgroundColor: '#2e8b57'
+  },
+  callActionText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700'
   },
   webViewContainer: {
     position: 'relative',

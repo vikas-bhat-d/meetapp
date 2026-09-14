@@ -8,6 +8,7 @@
     "scheme": "livekitmeet",
     "plugins": [
       "expo-notifications",
+      "./plugins/withIncomingCall",
       "./plugins/withUserCaTrust",
       [
         "expo-build-properties",
@@ -25,7 +26,12 @@
         "CAMERA",
         "RECORD_AUDIO",
         "MODIFY_AUDIO_SETTINGS",
-        "POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS",
+        "USE_FULL_SCREEN_INTENT",
+        "VIBRATE",
+        "WAKE_LOCK",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_PHONE_CALL"
       ]
     },
     "extra": {

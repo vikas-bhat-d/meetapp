@@ -20,6 +20,12 @@ public interface ICallInvitationService
         bool audioEnabled,
         bool videoEnabled,
         CancellationToken cancellationToken = default);
+
+    Task<bool> CancelAsync(
+        ClaimsPrincipal caller,
+        string targetUserName,
+        Guid invitationId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CallInvitationService : ICallInvitationService
@@ -101,11 +107,16 @@ public sealed class CallInvitationService : ICallInvitationService
             $"{roomName} is ready to join.",
             new Dictionary<string, string>
             {
+                ["type"] = "INCOMING_CALL",
+                ["callUUID"] = invitation.InvitationId.ToString(),
                 ["invitationId"] = invitation.InvitationId.ToString(),
                 ["roomName"] = roomName,
                 ["roomUrl"] = roomUrl,
                 ["fromUserName"] = fromUserName,
                 ["fromDisplayName"] = fromDisplayName,
+                ["callerName"] = fromDisplayName,
+                ["callerHandle"] = fromUserName,
+                ["hasVideo"] = videoEnabled.ToString().ToLowerInvariant(),
                 ["audioEnabled"] = audioEnabled.ToString().ToLowerInvariant(),
                 ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant()
             },
@@ -130,5 +141,35 @@ public sealed class CallInvitationService : ICallInvitationService
         }
 
         return new CallInvitationResult(true, null, invitation.InvitationId);
+    }
+
+    public async Task<bool> CancelAsync(
+        ClaimsPrincipal caller,
+        string targetUserName,
+        Guid invitationId,
+        CancellationToken cancellationToken = default)
+    {
+        targetUserName = targetUserName.Trim();
+        if (string.IsNullOrWhiteSpace(targetUserName))
+        {
+            return false;
+        }
+
+        var target = await _db.Users
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                user => user.NormalizedUserName == UserNameNormalizer.Normalize(targetUserName) && user.IsActive,
+                cancellationToken);
+        if (target is null)
+        {
+            return false;
+        }
+
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(target.Id))
+            .SendAsync("CallCancelled", invitationId, cancellationToken);
+
+        await _pushNotifications.SendCancelAsync(target.Id, invitationId, cancellationToken);
+        return true;
     }
 }

@@ -190,6 +190,13 @@ else
     [SupplyParameterFromQuery(Name = "video")]
     public string? QueryVideo { get; set; }
 
+    // Support both the documented spelling and the original URL spelling.
+    [SupplyParameterFromQuery(Name = "invite")]
+    public string? QueryInvite { get; set; }
+
+    [SupplyParameterFromQuery(Name = "invide")]
+    public string? QueryInvide { get; set; }
+
     private string participantName = "";
     private bool needsPreJoin = false;
     private bool isAudioEnabled = true;
@@ -201,6 +208,7 @@ else
     private string inviteUsername = "";
     private bool isRinging = false;
     private string ringStatusMessage = "";
+    private bool queryInvitationsSent = false;
 
     private List<ParticipantDto> participants = new();
     private DotNetObjectReference<Room>? dotNetRef;
@@ -234,6 +242,7 @@ else
         if (firstRender && !needsPreJoin && !hasJoined)
         {
             await ConnectToRoomAsync();
+            await SendQueryInvitationsAsync();
         }
     }
 
@@ -247,6 +256,54 @@ else
 
         // Connect after pre-join submission
         await ConnectToRoomAsync();
+        await SendQueryInvitationsAsync();
+    }
+
+    private IEnumerable<string> GetQueryInviteUserNames()
+    {
+        return new[] { QueryInvite, QueryInvide }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .SelectMany(value => value!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task SendQueryInvitationsAsync()
+    {
+        if (queryInvitationsSent)
+        {
+            return;
+        }
+
+        var invitees = GetQueryInviteUserNames().ToArray();
+        if (invitees.Length == 0)
+        {
+            queryInvitationsSent = true;
+            return;
+        }
+
+        queryInvitationsSent = true;
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var meetingUrl = GetShareableMeetingUrl();
+        var results = new List<string>();
+
+        foreach (var invitee in invitees)
+        {
+            var result = await CallInvitationService.SendAsync(
+                authState.User,
+                invitee,
+                RoomName,
+                meetingUrl,
+                isAudioEnabled,
+                isVideoEnabled);
+
+            results.Add(result.Success
+                ? $"Invited {invitee}."
+                : $"Could not invite {invitee}: {result.Error}");
+        }
+
+        ringStatusMessage = string.Join(" ", results);
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task ConnectToRoomAsync()

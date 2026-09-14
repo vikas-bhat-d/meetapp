@@ -22,6 +22,11 @@ public interface IFirebasePushNotificationService
         string body,
         IReadOnlyDictionary<string, string> data,
         CancellationToken cancellationToken = default);
+
+    Task<FcmSendResult> SendCancelAsync(
+        Guid userId,
+        Guid invitationId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class FirebasePushNotificationService : IFirebasePushNotificationService
@@ -47,6 +52,24 @@ public sealed class FirebasePushNotificationService : IFirebasePushNotificationS
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+    }
+
+    public async Task<FcmSendResult> SendCancelAsync(
+        Guid userId,
+        Guid invitationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await SendAsync(
+            userId,
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>
+            {
+                ["type"] = "CANCEL_CALL",
+                ["invitationId"] = invitationId.ToString(),
+                ["callUUID"] = invitationId.ToString()
+            },
+            cancellationToken);
     }
 
     public async Task<FcmSendResult> SendAsync(
@@ -87,23 +110,31 @@ public sealed class FirebasePushNotificationService : IFirebasePushNotificationS
             var endpoint = $"https://fcm.googleapis.com/v1/projects/{Uri.EscapeDataString(credentials.ProjectId)}/messages:send";
             var delivered = 0;
 
+            var dataPayload = new Dictionary<string, string>(data);
+            if (!string.IsNullOrWhiteSpace(title) && !dataPayload.ContainsKey("title"))
+            {
+                dataPayload["title"] = title;
+            }
+            if (!string.IsNullOrWhiteSpace(body) && !dataPayload.ContainsKey("body"))
+            {
+                dataPayload["body"] = body;
+            }
+
             foreach (var device in devices)
             {
+                // Send a Data-Only High-Priority message. If a "notification" key is included,
+                // Android intercepts the push at the OS level when in the background/killed,
+                // rendering a passive notification tray icon instead of waking the app to
+                // display the incoming call screen.
                 var payload = new
                 {
                     message = new
                     {
                         token = device.PushToken,
-                        notification = new { title, body },
-                        data,
+                        data = dataPayload,
                         android = new
                         {
-                            priority = "HIGH",
-                            notification = new
-                            {
-                                channel_id = "incoming-calls",
-                                sound = "default"
-                            }
+                            priority = "HIGH"
                         }
                     }
                 };
