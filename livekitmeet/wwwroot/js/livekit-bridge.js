@@ -10,32 +10,36 @@ window.livekitBridge = {
     dotNetRef: null,
     gridContainer: null,
     audioContainer: null,
+    microphoneTrack: null,
+    microphoneEnabled: false,
+    authRefreshPromise: null,
     participants: new Map(), // identity -> { participant, tileEl, videoEl, avatarEl, micEl }
 
-    /**
-     * Acquire one microphone track and let LiveKit publish that same track.
-     * Opening a probe stream and then opening the microphone again can make
-     * Android WebView report "Could not start audio source".
-     */
-    async _createMicrophoneTrack() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            throw new Error('Microphone capture is not available in this WebView.');
+    _disposeMicrophoneTrack() {
+        const microphoneTrack = this.microphoneTrack;
+        this.microphoneTrack = null;
+        this.microphoneEnabled = false;
+
+        try {
+            microphoneTrack?.stop();
+        } catch (error) {
+            console.warn('[LiveKitBridge] Microphone cleanup error:', error);
+        }
+    },
+
+    _findMicrophonePublication(participant) {
+        const publications = participant?.audioTrackPublications || participant?.trackPublications;
+        if (!publications || typeof publications.values !== 'function') {
+            return null;
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaTrack = stream.getAudioTracks()[0];
-        if (!mediaTrack) {
-            stream.getTracks().forEach(track => track.stop());
-            throw new Error('The WebView did not return a microphone track.');
+        for (const publication of publications.values()) {
+            if (publication.kind === 'audio' || publication.track?.kind === 'audio') {
+                return publication;
+            }
         }
 
-        const LocalAudioTrack = window.LivekitClient.LocalAudioTrack;
-        if (!LocalAudioTrack) {
-            mediaTrack.stop();
-            throw new Error('LiveKit microphone track support is not available.');
-        }
-
-        return new LocalAudioTrack(mediaTrack);
+        return null;
     },
 
     _notifyMediaError(mediaType, error) {
@@ -50,10 +54,35 @@ window.livekitBridge = {
     },
 
     async _publishMicrophoneTrack(participant) {
-        const microphoneTrack = await this._createMicrophoneTrack();
         const microphoneSource = window.LivekitClient.Track?.Source?.Microphone;
         const publishOptions = microphoneSource ? { source: microphoneSource } : undefined;
-        await participant.publishTrack(microphoneTrack, publishOptions);
+        const publication = await participant.setMicrophoneEnabled(true, undefined, publishOptions);
+        const activePublication = publication ?? this._findMicrophonePublication(participant);
+        const microphoneTrack = activePublication?.track;
+        if (!microphoneTrack) {
+            throw new Error('LiveKit did not create a microphone publication.');
+        }
+
+        if (this.microphoneTrack !== microphoneTrack) {
+            this.microphoneTrack = microphoneTrack;
+            microphoneTrack.mediaStreamTrack.onended = () => {
+                if (this.microphoneTrack !== microphoneTrack) {
+                    return;
+                }
+
+                this.microphoneTrack = null;
+                this.microphoneEnabled = false;
+                this._notifyMediaError('microphone', 'The microphone stream ended. Tap Enable microphone to retry.');
+                this._updateLocalState();
+                this._notifyParticipants();
+            };
+        }
+
+        this.microphoneEnabled = true;
+        window.ReactNativeWebView?.postMessage(JSON.stringify({
+            type: 'media-recovered',
+            mediaType: 'microphone'
+        }));
     },
 
     /**
@@ -124,8 +153,11 @@ window.livekitBridge = {
                 try {
                     await this._publishMicrophoneTrack(room.localParticipant);
                 } catch (e) {
+                    this.microphoneEnabled = false;
                     this._notifyMediaError('microphone', e);
                 }
+            } else {
+                this.microphoneEnabled = false;
             }
 
             // Existing remote participants
@@ -150,7 +182,7 @@ window.livekitBridge = {
                 );
                 await this.dotNetRef.invokeMethodAsync(
                     'OnTrackStateChanged',
-                    room.localParticipant.isMicrophoneEnabled,
+                    this.microphoneEnabled,
                     room.localParticipant.isCameraEnabled
                 );
             }
@@ -420,7 +452,7 @@ window.livekitBridge = {
                 identity: identity,
                 name: p.name || identity,
                 isLocal: info.isLocal,
-                isAudioEnabled: p.isMicrophoneEnabled,
+                isAudioEnabled: info.isLocal ? this.microphoneEnabled : p.isMicrophoneEnabled,
                 isVideoEnabled: p.isCameraEnabled,
                 isSpeaking: info.tileEl ? info.tileEl.classList.contains('speaking') : false
             });
@@ -436,7 +468,7 @@ window.livekitBridge = {
         const local = this.activeRoom.localParticipant;
         this.dotNetRef.invokeMethodAsync(
             'OnTrackStateChanged',
-            local.isMicrophoneEnabled,
+            this.microphoneEnabled,
             local.isCameraEnabled
         );
     },
@@ -447,12 +479,13 @@ window.livekitBridge = {
     async toggleAudio() {
         if (!this.activeRoom) return false;
         const local = this.activeRoom.localParticipant;
-        const newState = !local.isMicrophoneEnabled;
+        const newState = !this.microphoneEnabled;
         try {
             if (newState) {
                 await this._publishMicrophoneTrack(local);
             } else {
                 await local.setMicrophoneEnabled(false);
+                this.microphoneEnabled = false;
             }
         } catch (e) {
             this._notifyMediaError('microphone', e);
@@ -461,13 +494,27 @@ window.livekitBridge = {
 
         const info = this.participants.get(local.identity);
         if (info && info.micEl) {
-            info.micEl.className = `lk-mic-status ${newState ? 'unmuted' : 'muted'}`;
-            info.micEl.innerHTML = newState ? '🎤' : '🔇';
+            info.micEl.className = `lk-mic-status ${this.microphoneEnabled ? 'unmuted' : 'muted'}`;
+            info.micEl.innerHTML = this.microphoneEnabled ? '🎤' : '🔇';
         }
 
         this._updateLocalState();
         this._notifyParticipants();
-        return newState;
+        return this.microphoneEnabled;
+    },
+
+    async recoverMicrophone() {
+        if (!this.activeRoom) return false;
+
+        try {
+            await this._publishMicrophoneTrack(this.activeRoom.localParticipant);
+            this._updateLocalState();
+            this._notifyParticipants();
+            return true;
+        } catch (error) {
+            this._notifyMediaError('microphone', error);
+            return false;
+        }
     },
 
     /**
@@ -507,6 +554,7 @@ window.livekitBridge = {
             }
             this.activeRoom = null;
         }
+        this._disposeMicrophoneTrack();
 
         if (this.gridContainer) {
             this.gridContainer.innerHTML = '';
@@ -537,11 +585,7 @@ window.livekitBridge = {
         // If the short-lived access token expired, rotate the stored refresh token
         // and retry once. A revoked/deactivated account still fails closed.
         if (response.status === 401) {
-            const refreshResponse = await fetch('/api/auth/refresh', {
-                method: 'POST',
-                credentials: 'same-origin'
-            });
-            if (refreshResponse.ok) {
+            if (await this._refreshSession()) {
                 response = await request();
             }
         }
@@ -558,6 +602,24 @@ window.livekitBridge = {
         }
 
         return await response.json();
+    },
+
+    async _refreshSession() {
+        if (!this.authRefreshPromise) {
+            this.authRefreshPromise = (async () => {
+                try {
+                    const response = await fetch('/api/auth/refresh', {
+                        method: 'POST',
+                        credentials: 'same-origin'
+                    });
+                    return response.ok;
+                } finally {
+                    this.authRefreshPromise = null;
+                }
+            })();
+        }
+
+        return await this.authRefreshPromise;
     },
 
     /**

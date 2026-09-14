@@ -326,6 +326,26 @@ async function requestMediaPermissionsAsync(): Promise<MediaPermissionResult> {
   };
 }
 
+async function requestMicrophonePermissionAsync(): Promise<MediaPermissionStatus> {
+  if (Platform.OS !== 'android' || Platform.Version < 23) {
+    return 'granted';
+  }
+
+  try {
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      {
+        title: 'Microphone permission',
+        message: 'LiveKit Meet needs microphone access so other participants can hear you.',
+        buttonPositive: 'Allow'
+      }
+    );
+    return toMediaPermissionStatus(result);
+  } catch {
+    return 'denied';
+  }
+}
+
 export default function App() {
   const webViewRef = useRef<WebView>(null);
   const hasLoadedDocumentRef = useRef(false);
@@ -371,17 +391,43 @@ export default function App() {
 
   const handleEnableMicrophone = useCallback(async () => {
     setMicrophoneError(null);
-    const result = await requestMediaAccess();
-    if (result.microphone === 'blocked') {
+    const microphoneStatus = await requestMicrophonePermissionAsync();
+    setMediaPermissions(previous => ({ ...previous, microphone: microphoneStatus }));
+    if (microphoneStatus === 'blocked') {
       await Linking.openSettings();
+      return;
     }
-  }, [requestMediaAccess]);
+
+    if (microphoneStatus === 'granted') {
+      webViewRef.current?.injectJavaScript(`
+        window.livekitBridge?.recoverMicrophone?.().catch?.(() => false);
+        true;
+      `);
+    }
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === 'android') {
       requestMediaAccess().catch(() => undefined);
     }
   }, [requestMediaAccess]);
+
+  useEffect(() => {
+    if (!microphoneError || mediaPermissions.microphone !== 'granted') {
+      return;
+    }
+
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        webViewRef.current?.injectJavaScript(`
+          window.livekitBridge?.recoverMicrophone?.();
+          true;
+        `);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [mediaPermissions.microphone, microphoneError]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -655,6 +701,11 @@ export default function App() {
       };
       if (message.type === 'media-error' && message.mediaType === 'microphone') {
         setMicrophoneError(message.message ?? 'The WebView could not access the microphone.');
+        return;
+      }
+      if (message.type === 'media-recovered' && message.mediaType === 'microphone') {
+        setMicrophoneError(null);
+        setMediaPermissions(previous => ({ ...previous, microphone: 'granted' }));
         return;
       }
       if (message.type === 'fcm-registration') {

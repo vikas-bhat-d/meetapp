@@ -14,6 +14,37 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+static string GetSafeReturnUrl(string? returnUrl)
+{
+    if (string.IsNullOrWhiteSpace(returnUrl) ||
+        !returnUrl.StartsWith("/", StringComparison.Ordinal) ||
+        returnUrl.StartsWith("//", StringComparison.Ordinal) ||
+        returnUrl.Contains('\\') ||
+        returnUrl.Any(char.IsControl))
+    {
+        return "/";
+    }
+
+    return returnUrl;
+}
+
+static string BuildLoginRedirect(string? returnUrl, string? error = null)
+{
+    var query = new List<string>();
+    if (!string.IsNullOrWhiteSpace(error))
+    {
+        query.Add($"error={Uri.EscapeDataString(error)}");
+    }
+
+    var safeReturnUrl = GetSafeReturnUrl(returnUrl);
+    if (safeReturnUrl != "/")
+    {
+        query.Add($"returnUrl={Uri.EscapeDataString(safeReturnUrl)}");
+    }
+
+    return query.Count == 0 ? "/login" : $"/login?{string.Join('&', query)}";
+}
+
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddSignalR();
@@ -132,7 +163,7 @@ builder.Services.AddAuthentication(options =>
                     context.Fail("The access token has been revoked or is no longer valid.");
                 }
             },
-            OnChallenge = context =>
+            OnChallenge = async context =>
             {
                 // Browser page navigations should reach the sign-in page. API callers
                 // must continue to receive a standard 401 response.
@@ -140,11 +171,29 @@ builder.Services.AddAuthentication(options =>
                     HttpMethods.IsGet(context.Request.Method) &&
                     !context.Request.Path.StartsWithSegments("/api"))
                 {
-                    context.HandleResponse();
-                    context.Response.Redirect("/login");
-                }
+                    var refreshToken = context.Request.Cookies[AuthService.RefreshTokenCookieName];
+                    if (!string.IsNullOrWhiteSpace(refreshToken))
+                    {
+                        var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
+                        var refreshResult = await authService.RefreshAsync(
+                            refreshToken,
+                            context.HttpContext.RequestAborted);
+                        if (refreshResult.Success && refreshResult.Tokens is not null)
+                        {
+                            authService.SetAuthCookies(context.HttpContext, refreshResult.Tokens);
+                            context.HandleResponse();
+                            var currentUrl = $"{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}";
+                            context.Response.Redirect(GetSafeReturnUrl(currentUrl));
+                            return;
+                        }
 
-                return Task.CompletedTask;
+                        authService.ClearAuthCookies(context.HttpContext);
+                    }
+
+                    context.HandleResponse();
+                    var returnUrl = $"{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}";
+                    context.Response.Redirect(BuildLoginRedirect(returnUrl));
+                }
             }
         };
     });
@@ -173,6 +222,7 @@ app.UseAntiforgery();
 app.MapPost("/api/auth/login", async (HttpContext context, IAuthService authService) =>
 {
     var form = await context.Request.ReadFormAsync(context.RequestAborted);
+    var returnUrl = GetSafeReturnUrl(form["returnUrl"].ToString());
     var result = await authService.LoginAsync(
         form["username"].ToString(),
         form["password"].ToString(),
@@ -180,11 +230,11 @@ app.MapPost("/api/auth/login", async (HttpContext context, IAuthService authServ
 
     if (!result.Success || result.Tokens is null)
     {
-        return Results.Redirect("/login?error=invalid");
+        return Results.Redirect(BuildLoginRedirect(returnUrl, "invalid"));
     }
 
     authService.SetAuthCookies(context, result.Tokens);
-    return Results.Redirect("/");
+    return Results.Redirect(returnUrl);
 }).AllowAnonymous();
 
 app.MapPost("/api/auth/token", async (AuthTokenLoginRequest request, IAuthService authService) =>

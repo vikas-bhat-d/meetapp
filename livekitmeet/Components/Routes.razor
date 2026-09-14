@@ -1,3 +1,5 @@
+@inject NavigationManager Navigation
+
 <CascadingAuthenticationState>
     <Router AppAssembly="typeof(Program).Assembly">
         <Found Context="routeData">
@@ -8,7 +10,7 @@
                             <div class="lobby-card">
                                 <h1 class="lobby-title">Sign in required</h1>
                                 <p class="lobby-subtitle">Please sign in before opening LiveKit Meet.</p>
-                                <a class="btn-primary" href="/login" style="display: block; text-align: center; text-decoration: none;">Go to sign in</a>
+                                <a class="btn-primary" href="@GetLoginUrl()" style="display: block; text-align: center; text-decoration: none;">Go to sign in</a>
                             </div>
                         </div>
                     </LayoutView>
@@ -23,3 +25,12 @@
         </Found>
     </Router>
 </CascadingAuthenticationState>
+
+@code {
+    private string GetLoginUrl()
+    {
+        var relativeUrl = Navigation.ToBaseRelativePath(Navigation.Uri);
+        var returnUrl = string.IsNullOrWhiteSpace(relativeUrl) ? "/" : $"/{relativeUrl}";
+        return $"/login?returnUrl={Uri.EscapeDataString(returnUrl)}";
+    }
+}

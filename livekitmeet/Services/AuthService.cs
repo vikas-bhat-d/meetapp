@@ -223,6 +223,7 @@ public sealed class AuthService : IAuthService
     public void SetAuthCookies(HttpContext context, IssuedAuthTokens tokens)
     {
         var secure = context.Request.IsHttps;
+        context.Response.Cookies.Delete(RefreshTokenCookieName, new CookieOptions { Path = "/api/auth" });
         context.Response.Cookies.Append(AccessTokenCookieName, tokens.AccessToken, new CookieOptions
         {
             HttpOnly = true,
@@ -239,13 +240,14 @@ public sealed class AuthService : IAuthService
             SameSite = SameSiteMode.Lax,
             Expires = new DateTimeOffset(tokens.RefreshTokenExpiresAtUtc),
             IsEssential = true,
-            Path = "/api/auth"
+            Path = "/"
         });
     }
 
     public void ClearAuthCookies(HttpContext context)
     {
         context.Response.Cookies.Delete(AccessTokenCookieName, new CookieOptions { Path = "/" });
+        context.Response.Cookies.Delete(RefreshTokenCookieName, new CookieOptions { Path = "/" });
         context.Response.Cookies.Delete(RefreshTokenCookieName, new CookieOptions { Path = "/api/auth" });
     }
 

@@ -23,6 +23,7 @@
         }
 
         <form method="post" action="/api/auth/login">
+            <input type="hidden" name="returnUrl" value="@SafeReturnUrl" />
             <div class="form-group">
                 <label class="form-label" for="username">Username</label>
                 <input id="username" name="username" class="form-input" autocomplete="username" required autofocus />
@@ -46,7 +47,19 @@
     [SupplyParameterFromQuery(Name = "loggedOut")]
     public string? LoggedOut { get; set; }
 
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    private string SafeReturnUrl => IsLocalReturnUrl(ReturnUrl) ? ReturnUrl! : "/";
+
     private string? ErrorMessage => Error == "invalid"
         ? "Invalid username or password."
         : Error;
+
+    private static bool IsLocalReturnUrl(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.StartsWith("/", StringComparison.Ordinal) &&
+        !value.StartsWith("//", StringComparison.Ordinal) &&
+        !value.Contains('\\') &&
+        !value.Any(char.IsControl);
 }
