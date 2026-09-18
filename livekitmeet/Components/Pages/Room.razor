@@ -447,6 +447,7 @@ else
 
     public async Task LeaveRoomAsync()
     {
+        participantLeaveRequested = true;
         try
         {
             await JSRuntime.InvokeVoidAsync("livekitBridge.leaveRoom");
@@ -457,6 +458,7 @@ else
         }
         finally
         {
+            await FinalizeParticipantSessionAsync();
             await FinalizeCallLogsAsync();
             Navigation.NavigateTo("/");
         }
@@ -537,6 +539,7 @@ else
     public async Task OnRoomConnected(string roomName, string identity)
     {
         connectionStatus = "Connected";
+        await StartParticipantSessionAsync(roomName);
         await InvokeAsync(StateHasChanged);
     }
 
@@ -570,6 +573,8 @@ else
     public async Task OnDisconnected()
     {
         connectionStatus = "Disconnected";
+        participantLeaveRequested = true;
+        await FinalizeParticipantSessionAsync();
         await FinalizeCallLogsAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -591,6 +596,8 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        participantLeaveRequested = true;
+        await FinalizeParticipantSessionAsync();
         await FinalizeCallLogsAsync();
 
         try
@@ -604,7 +611,57 @@ else
         dotNetRef?.Dispose();
     }
 
+    private Guid? participantSessionId;
+    private bool participantLeaveRequested;
+    private Task? participantFinalizationTask;
     private bool callLogsFinalized;
+
+    private async Task StartParticipantSessionAsync(string roomName)
+    {
+        if (participantSessionId is not null)
+        {
+            return;
+        }
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        Guid? invitationId = Guid.TryParse(QueryInvitationId, out var parsedInvitationId)
+            ? parsedInvitationId
+            : null;
+        participantSessionId = await CallLogService.JoinParticipantAsync(
+            authState.User,
+            roomName,
+            GetShareableMeetingUrl(),
+            invitationId);
+
+        if (participantLeaveRequested)
+        {
+            await FinalizeParticipantSessionAsync();
+        }
+    }
+
+    private async Task FinalizeParticipantSessionAsync()
+    {
+        if (participantSessionId is not Guid sessionId)
+        {
+            return;
+        }
+
+        participantFinalizationTask ??= FinalizeParticipantSessionCoreAsync(sessionId);
+        await participantFinalizationTask;
+    }
+
+    private async Task FinalizeParticipantSessionCoreAsync(Guid sessionId)
+    {
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            await CallLogService.LeaveParticipantAsync(authState.User, sessionId);
+        }
+        catch
+        {
+            // Ignore during page unload.
+        }
+    }
 
     private async Task MarkIncomingInvitationAnsweredAsync()
     {

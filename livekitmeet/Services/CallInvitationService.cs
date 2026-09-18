@@ -84,6 +84,18 @@ public sealed class CallInvitationService : ICallInvitationService
         {
             return CallInvitationResult.Failed("You cannot call yourself.");
         }
+
+        roomName = roomName.Trim();
+        if (await _db.CallParticipantSessions.AnyAsync(
+                session => session.UserId == target.Id &&
+                           session.LeftAtUtc == null &&
+                           session.CallRoomLog.RoomName == roomName &&
+                           session.CallRoomLog.EndedAtUtc == null,
+                cancellationToken))
+        {
+            return CallInvitationResult.Failed("That user is already in this room.");
+        }
+
         var fromUserName = caller.FindFirstValue(ClaimTypes.Name) ?? "User";
         var fromDisplayName = caller.FindFirst("display_name")?.Value ?? fromUserName;
         var invitationId = Guid.NewGuid();

@@ -12,6 +12,8 @@ public sealed class AppDbContext : DbContext
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
     public DbSet<PushDevice> PushDevices => Set<PushDevice>();
     public DbSet<CallLog> CallLogs => Set<CallLog>();
+    public DbSet<CallRoomLog> CallRoomLogs => Set<CallRoomLog>();
+    public DbSet<CallParticipantSession> CallParticipantSessions => Set<CallParticipantSession>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -68,6 +70,30 @@ public sealed class AppDbContext : DbContext
             entity.HasOne(log => log.Recipient)
                 .WithMany()
                 .HasForeignKey(log => log.RecipientId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CallRoomLog>(entity =>
+        {
+            entity.HasKey(room => room.Id);
+            entity.Property(room => room.RoomName).HasMaxLength(200).IsRequired();
+            entity.Property(room => room.RoomUrl).HasMaxLength(2048).IsRequired();
+            entity.HasIndex(room => room.RoomName).IsUnique();
+        });
+
+        modelBuilder.Entity<CallParticipantSession>(entity =>
+        {
+            entity.HasKey(session => session.Id);
+            entity.HasIndex(session => session.CallRoomLogId);
+            entity.HasIndex(session => session.UserId);
+            entity.HasIndex(session => session.InvitationId);
+            entity.HasOne(session => session.CallRoomLog)
+                .WithMany(room => room.Participants)
+                .HasForeignKey(session => session.CallRoomLogId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(session => session.User)
+                .WithMany()
+                .HasForeignKey(session => session.UserId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

@@ -796,8 +796,23 @@ input:focus-visible {
 }
 
 .wc-history-result.answered span,
-.wc-history-result.ended span {
+.wc-history-result.ended span,
+.wc-history-result.completed span {
     color: var(--wc-green);
+}
+
+.wc-history-result.in-progress span {
+    color: var(--wc-red);
+}
+
+.wc-history-result.no-attendance span {
+    color: var(--wc-muted);
+}
+
+.wc-room-history-row .wc-call-person-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .wc-profile-grid {

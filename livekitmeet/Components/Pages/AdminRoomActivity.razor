@@ -1,0 +1,189 @@
+@page "/admin/room-activity"
+@attribute [Authorize(Roles = "Admin")]
+@layout MainLayout
+@rendermode InteractiveServer
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ICallLogService CallLogs
+
+<PageTitle>Room activity - wincall</PageTitle>
+
+<div class="admin-page room-log-page">
+    <header class="admin-header room-log-header">
+        <div>
+            <span class="wc-kicker">Administrator view</span>
+            <h1>Room activity</h1>
+            <p>Review who joined each room, when they left, and how invitations resolved.</p>
+        </div>
+        <button type="button" class="btn-secondary" @onclick="LoadRoomsAsync" disabled="@isLoading">@(isLoading ? "Refreshing..." : "Refresh")</button>
+    </header>
+
+    @if (rooms is null)
+    {
+        <div class="wc-empty-state">Loading room activity...</div>
+    }
+    else if (rooms.Count == 0)
+    {
+        <div class="wc-empty-state">
+            <strong>No room activity yet</strong>
+            <span>Room attendance will appear after someone joins a meeting.</span>
+        </div>
+    }
+    else
+    {
+        <div class="room-log-list">
+            @foreach (var room in rooms)
+            {
+                <article class="room-log-item">
+                    <header class="room-log-item-header">
+                        <div>
+                            <span class="wc-kicker">Room</span>
+                            <h2>@room.RoomName</h2>
+                            <p>Created @FormatDateTime(room.CreatedAtUtc)</p>
+                        </div>
+                        <dl class="room-log-summary">
+                            <div>
+                                <dt>Room duration</dt>
+                                <dd>@FormatRoomDuration(room)</dd>
+                            </div>
+                            <div>
+                                <dt>People</dt>
+                                <dd>@GetParticipantCount(room)</dd>
+                            </div>
+                            <div>
+                                <dt>Invitations</dt>
+                                <dd>@room.Invitations.Count</dd>
+                            </div>
+                        </dl>
+                    </header>
+
+                    <section class="room-log-section">
+                        <h3>Participants</h3>
+                        @if (room.Participants.Count == 0)
+                        {
+                            <p class="admin-help">No attendance session was recorded.</p>
+                        }
+                        else
+                        {
+                            <div class="user-table-wrap">
+                                <table class="user-table room-log-table">
+                                    <thead>
+                                        <tr><th>User</th><th>Joined</th><th>Left</th><th>Duration</th><th>Status</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var participant in room.Participants)
+                                        {
+                                            <tr>
+                                                <td><strong>@participant.DisplayName</strong><br /><span>@participant.UserName</span></td>
+                                                <td>@FormatDateTime(participant.JoinedAtUtc)</td>
+                                                <td>@(participant.LeftAtUtc is DateTime leftAt ? FormatDateTime(leftAt) : "Still in room")</td>
+                                                <td>@FormatDuration(participant.DurationSeconds)</td>
+                                                <td><span class="room-log-status @(participant.IsActive ? "room-log-status-active" : "room-log-status-ended")">@(participant.IsActive ? "Active" : "Ended")</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </section>
+
+                    <section class="room-log-section">
+                        <h3>Invitations</h3>
+                        @if (room.Invitations.Count == 0)
+                        {
+                            <p class="admin-help">No invitation was recorded for this room.</p>
+                        }
+                        else
+                        {
+                            <div class="user-table-wrap">
+                                <table class="user-table room-log-table">
+                                    <thead>
+                                        <tr><th>From</th><th>To</th><th>Sent</th><th>Answered</th><th>Outcome</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var invitation in room.Invitations)
+                                        {
+                                            <tr>
+                                                <td><strong>@invitation.CallerDisplayName</strong><br /><span>@invitation.CallerUserName</span></td>
+                                                <td><strong>@invitation.RecipientDisplayName</strong><br /><span>@invitation.RecipientUserName</span></td>
+                                                <td>@FormatDateTime(invitation.CreatedAtUtc)</td>
+                                                <td>@(invitation.AnsweredAtUtc is DateTime answeredAt ? FormatDateTime(answeredAt) : "-")</td>
+                                                <td><span class="room-log-status @GetInvitationStatusClass(invitation.Status)">@GetInvitationStatus(invitation.Status)</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </section>
+                </article>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<AdminCallRoomLogItem>? rooms;
+    private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
+    private bool isLoading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = authState.User;
+        await LoadRoomsAsync();
+    }
+
+    private async Task LoadRoomsAsync()
+    {
+        isLoading = true;
+        try
+        {
+            rooms = await CallLogs.GetAdminRoomLogsAsync(currentUser, 100);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm:ss tt");
+
+    private static int GetParticipantCount(AdminCallRoomLogItem room) =>
+        room.Participants.Select(participant => participant.UserId).Distinct().Count();
+
+    private static string FormatDuration(int seconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return duration.TotalHours >= 1
+            ? duration.ToString(@"h\h\ mm\m\ ss\s")
+            : duration.ToString(@"m\m\ ss\s");
+    }
+
+    private static string FormatRoomDuration(AdminCallRoomLogItem room)
+    {
+        if (room.StartedAtUtc is not DateTime startedAt)
+        {
+            return "Not started";
+        }
+
+        var endedAt = room.EndedAtUtc ?? DateTime.UtcNow;
+        return endedAt < startedAt ? "0m 00s" : FormatDuration((int)Math.Round((endedAt - startedAt).TotalSeconds));
+    }
+
+    private static string GetInvitationStatus(string status) => status switch
+    {
+        CallLogStatuses.Answered or CallLogStatuses.Ended => "Completed",
+        CallLogStatuses.Declined => "Declined",
+        CallLogStatuses.Cancelled => "Cancelled",
+        CallLogStatuses.Failed => "Failed",
+        CallLogStatuses.Ringing => "Ringing",
+        _ => status
+    };
+
+    private static string GetInvitationStatusClass(string status) => status switch
+    {
+        CallLogStatuses.Answered or CallLogStatuses.Ended => "room-log-status-active",
+        CallLogStatuses.Ringing => "room-log-status-pending",
+        _ => "room-log-status-ended"
+    };
+}

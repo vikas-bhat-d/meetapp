@@ -11,7 +11,9 @@ public static class DatabaseInitializer
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.EnsureCreatedAsync();
         await EnsurePushDevicesTableAsync(db);
+        await EnsureCallRoomTablesAsync(db);
         await EnsureCallLogsTableAsync(db);
+        await CloseOrphanedParticipantSessionsAsync(db);
 
         var adminUserName = configuration["Admin:UserName"]?.Trim();
         var adminPassword = configuration["Admin:Password"];
@@ -167,6 +169,113 @@ public static class DatabaseInitializer
                 IF COL_LENGTH(N'CallLogs', N'DurationSeconds') IS NULL
                 BEGIN
                     ALTER TABLE [CallLogs] ADD [DurationSeconds] int NULL;
+                END
+                """);
+        }
+    }
+
+    private static async Task CloseOrphanedParticipantSessionsAsync(AppDbContext db)
+    {
+        var openSessions = await db.CallParticipantSessions
+            .Include(session => session.CallRoomLog)
+            .Where(session => session.LeftAtUtc == null)
+            .ToListAsync();
+        if (openSessions.Count == 0)
+        {
+            return;
+        }
+
+        var closedAtUtc = DateTime.UtcNow;
+        foreach (var session in openSessions)
+        {
+            session.LeftAtUtc = closedAtUtc;
+            var totalSeconds = Math.Max(0, (int)Math.Round(
+                (closedAtUtc - session.JoinedAtUtc).TotalSeconds,
+                MidpointRounding.AwayFromZero));
+            session.DurationSeconds = totalSeconds;
+            session.CallRoomLog.EndedAtUtc = closedAtUtc;
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task EnsureCallRoomTablesAsync(AppDbContext db)
+    {
+        if (db.Database.IsSqlite())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "CallRoomLogs" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_CallRoomLogs" PRIMARY KEY,
+                    "RoomName" TEXT NOT NULL,
+                    "RoomUrl" TEXT NOT NULL,
+                    "CreatedAtUtc" TEXT NOT NULL,
+                    "StartedAtUtc" TEXT NULL,
+                    "EndedAtUtc" TEXT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_CallRoomLogs_RoomName"
+                    ON "CallRoomLogs" ("RoomName");
+
+                CREATE TABLE IF NOT EXISTS "CallParticipantSessions" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_CallParticipantSessions" PRIMARY KEY,
+                    "CallRoomLogId" TEXT NOT NULL,
+                    "UserId" TEXT NOT NULL,
+                    "InvitationId" TEXT NULL,
+                    "JoinedAtUtc" TEXT NOT NULL,
+                    "LeftAtUtc" TEXT NULL,
+                    "DurationSeconds" INTEGER NULL,
+                    CONSTRAINT "FK_CallParticipantSessions_CallRoomLogs_CallRoomLogId"
+                        FOREIGN KEY ("CallRoomLogId") REFERENCES "CallRoomLogs" ("Id") ON DELETE CASCADE,
+                    CONSTRAINT "FK_CallParticipantSessions_Users_UserId"
+                        FOREIGN KEY ("UserId") REFERENCES "Users" ("Id") ON DELETE RESTRICT
+                );
+                CREATE INDEX IF NOT EXISTS "IX_CallParticipantSessions_CallRoomLogId"
+                    ON "CallParticipantSessions" ("CallRoomLogId");
+                CREATE INDEX IF NOT EXISTS "IX_CallParticipantSessions_UserId"
+                    ON "CallParticipantSessions" ("UserId");
+                CREATE INDEX IF NOT EXISTS "IX_CallParticipantSessions_InvitationId"
+                    ON "CallParticipantSessions" ("InvitationId");
+                """);
+            return;
+        }
+
+        if (db.Database.IsSqlServer())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                IF OBJECT_ID(N'[CallRoomLogs]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [CallRoomLogs] (
+                        [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_CallRoomLogs] PRIMARY KEY,
+                        [RoomName] nvarchar(200) NOT NULL,
+                        [RoomUrl] nvarchar(2048) NOT NULL,
+                        [CreatedAtUtc] datetime2 NOT NULL,
+                        [StartedAtUtc] datetime2 NULL,
+                        [EndedAtUtc] datetime2 NULL
+                    );
+                    CREATE UNIQUE INDEX [IX_CallRoomLogs_RoomName]
+                        ON [CallRoomLogs] ([RoomName]);
+                END
+
+                IF OBJECT_ID(N'[CallParticipantSessions]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [CallParticipantSessions] (
+                        [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_CallParticipantSessions] PRIMARY KEY,
+                        [CallRoomLogId] uniqueidentifier NOT NULL,
+                        [UserId] uniqueidentifier NOT NULL,
+                        [InvitationId] uniqueidentifier NULL,
+                        [JoinedAtUtc] datetime2 NOT NULL,
+                        [LeftAtUtc] datetime2 NULL,
+                        [DurationSeconds] int NULL,
+                        CONSTRAINT [FK_CallParticipantSessions_CallRoomLogs_CallRoomLogId]
+                            FOREIGN KEY ([CallRoomLogId]) REFERENCES [CallRoomLogs] ([Id]) ON DELETE CASCADE,
+                        CONSTRAINT [FK_CallParticipantSessions_Users_UserId]
+                            FOREIGN KEY ([UserId]) REFERENCES [Users] ([Id]) ON DELETE NO ACTION
+                    );
+                    CREATE INDEX [IX_CallParticipantSessions_CallRoomLogId]
+                        ON [CallParticipantSessions] ([CallRoomLogId]);
+                    CREATE INDEX [IX_CallParticipantSessions_UserId]
+                        ON [CallParticipantSessions] ([UserId]);
+                    CREATE INDEX [IX_CallParticipantSessions_InvitationId]
+                        ON [CallParticipantSessions] ([InvitationId]);
                 END
                 """);
         }
