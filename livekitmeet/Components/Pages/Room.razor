@@ -6,6 +6,7 @@
 @inject IJSRuntime JSRuntime
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ICallInvitationService CallInvitationService
+@inject ICallLogService CallLogService
 @implements IAsyncDisposable
 
 <PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
@@ -241,6 +242,9 @@ else
     [SupplyParameterFromQuery(Name = "invide")]
     public string? QueryInvide { get; set; }
 
+    [SupplyParameterFromQuery(Name = "invitationId")]
+    public string? QueryInvitationId { get; set; }
+
     private string participantName = "";
     private bool needsPreJoin = false;
     private bool isAudioEnabled = true;
@@ -257,6 +261,7 @@ else
     private List<ParticipantDto> participants = new();
     private DotNetObjectReference<Room>? dotNetRef;
     private bool hasJoined = false;
+    private readonly HashSet<Guid> invitationIds = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -264,6 +269,11 @@ else
         participantName = authState.User.FindFirst("display_name")?.Value?.Trim() ??
                           authState.User.Identity?.Name?.Trim() ??
                           string.Empty;
+
+        if (Guid.TryParse(QueryInvitationId, out var parsedInvitationId))
+        {
+            invitationIds.Add(parsedInvitationId);
+        }
 
         var hasAudioFlag = bool.TryParse(QueryAudio, out var a);
         if (hasAudioFlag)
@@ -341,6 +351,11 @@ else
                 isAudioEnabled,
                 isVideoEnabled);
 
+            if (result.Success && result.InvitationId is Guid sentInvitationId)
+            {
+                invitationIds.Add(sentInvitationId);
+            }
+
             results.Add(result.Success
                 ? $"Invited {invitee}."
                 : $"Could not invite {invitee}: {result.Error}");
@@ -374,7 +389,7 @@ else
             };
 
             // 2. Instruct JS Bridge to join room and render media streams inside #livekit-video-grid
-            await JSRuntime.InvokeVoidAsync(
+            var joinResult = await JSRuntime.InvokeAsync<RoomJoinResult>(
                 "livekitBridge.joinRoom",
                 "livekit-video-grid",
                 connDetails.ServerUrl,
@@ -382,6 +397,17 @@ else
                 dotNetRef,
                 userChoices
             );
+
+            if (!joinResult.Success)
+            {
+                connectionStatus = string.IsNullOrWhiteSpace(joinResult.Error)
+                    ? "Error"
+                    : $"Error: {joinResult.Error}";
+                StateHasChanged();
+                return;
+            }
+
+            await MarkIncomingInvitationAnsweredAsync();
         }
         catch (Exception ex)
         {
@@ -431,6 +457,7 @@ else
         }
         finally
         {
+            await FinalizeCallLogsAsync();
             Navigation.NavigateTo("/");
         }
     }
@@ -468,6 +495,11 @@ else
                 GetShareableMeetingUrl(),
                 isAudioEnabled,
                 isVideoEnabled);
+
+            if (result.Success && result.InvitationId is Guid sentInvitationId)
+            {
+                invitationIds.Add(sentInvitationId);
+            }
 
             ringStatusMessage = result.Success
                 ? $"Invitation sent to '{invitee}'."
@@ -538,6 +570,7 @@ else
     public async Task OnDisconnected()
     {
         connectionStatus = "Disconnected";
+        await FinalizeCallLogsAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -558,6 +591,8 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        await FinalizeCallLogsAsync();
+
         try
         {
             await JSRuntime.InvokeVoidAsync("livekitBridge.leaveRoom");
@@ -567,5 +602,50 @@ else
             // Ignore during page unload
         }
         dotNetRef?.Dispose();
+    }
+
+    private bool callLogsFinalized;
+
+    private async Task MarkIncomingInvitationAnsweredAsync()
+    {
+        if (!Guid.TryParse(QueryInvitationId, out var invitationId))
+        {
+            return;
+        }
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        await CallLogService.MarkAnsweredAsync(authState.User, invitationId);
+    }
+
+    private async Task FinalizeCallLogsAsync()
+    {
+        if (callLogsFinalized || invitationIds.Count == 0)
+        {
+            return;
+        }
+
+        callLogsFinalized = true;
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            foreach (var invitationId in invitationIds)
+            {
+                var ended = await CallLogService.MarkEndedAsync(authState.User, invitationId);
+                if (!ended)
+                {
+                    await CallInvitationService.CancelAsync(authState.User, invitationId);
+                }
+            }
+        }
+        catch
+        {
+            // Ignore during page unload.
+        }
+    }
+
+    private sealed class RoomJoinResult
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
     }
 }

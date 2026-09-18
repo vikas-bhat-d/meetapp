@@ -1,0 +1,108 @@
+@page "/contacts"
+@using Microsoft.EntityFrameworkCore
+@attribute [Authorize]
+@layout MainLayout
+@rendermode InteractiveServer
+@inject AppDbContext Db
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Navigation
+
+<PageTitle>wincall - Contacts</PageTitle>
+
+<div class="wc-page wc-contacts-page">
+    <header class="wc-page-heading">
+        <div>
+            <span class="wc-kicker">Directory</span>
+            <h1>Contacts</h1>
+            <p>Find someone from your workspace and start a call.</p>
+        </div>
+        <span class="wc-page-count">@filteredUsers.Count() people</span>
+    </header>
+
+    <div class="wc-search-bar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+        <input class="wc-input" @bind="searchTerm" @bind:event="oninput" placeholder="Search users..." autocomplete="off" />
+        @if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            <button type="button" class="wc-clear-button" @onclick="() => searchTerm = string.Empty" aria-label="Clear search" title="Clear search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+        }
+    </div>
+
+    @if (users is null)
+    {
+        <div class="wc-empty-state">Loading contacts...</div>
+    }
+    else if (!filteredUsers.Any())
+    {
+        <div class="wc-empty-state">
+            <span class="wc-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg></span>
+            <strong>No contacts found</strong>
+            <span>Try a different name or username.</span>
+        </div>
+    }
+    else
+    {
+        <div class="wc-contact-grid">
+            @foreach (var user in filteredUsers)
+            {
+                <article class="wc-contact-card">
+                    <div class="wc-contact-card-person">
+                        <span class="wc-contact-avatar wc-contact-avatar-large">@GetInitials(user.DisplayName)</span>
+                        <div>
+                            <h2>@user.DisplayName</h2>
+                            <p>@@@user.UserName</p>
+                        </div>
+                    </div>
+                    <div class="wc-contact-card-footer">
+                        <span class="wc-online-dot">Available</span>
+                        <button type="button" class="wc-primary-icon-button" @onclick="() => CallContact(user.UserName)" aria-label="Call @user.DisplayName" title="Call @user.DisplayName">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
+                            <span>Call</span>
+                        </button>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<AppUser>? users;
+    private Guid currentUserId;
+    private string searchTerm = string.Empty;
+
+    private IEnumerable<AppUser> filteredUsers => (users ?? Array.Empty<AppUser>())
+        .Where(user => string.IsNullOrWhiteSpace(searchTerm) ||
+                      user.DisplayName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                      user.UserName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(authState.User.FindFirstValue(ClaimTypes.NameIdentifier), out currentUserId);
+        users = await Db.Users
+            .AsNoTracking()
+            .Where(user => user.IsActive && user.Id != currentUserId)
+            .OrderBy(user => user.DisplayName)
+            .ToListAsync();
+    }
+
+    private void CallContact(string username)
+    {
+        var roomName = $"call-{Guid.NewGuid():N}"[..15];
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true&invite={Uri.EscapeDataString(username)}");
+    }
+
+    private static string GetInitials(string value)
+    {
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length switch
+        {
+            0 => "?",
+            1 => words[0][..1].ToUpperInvariant(),
+            _ => string.Concat(words[0][..1], words[^1][..1]).ToUpperInvariant()
+        };
+    }
+}

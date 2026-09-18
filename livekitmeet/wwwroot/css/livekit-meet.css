@@ -951,10 +951,10 @@ svg {
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(360px, 100vw);
-    background: #1b282f;
-    border-left: 1px solid #3a4b53;
-    box-shadow: -12px 0 28px rgba(5, 11, 14, 0.3);
+    width: min(380px, 100vw);
+    background: #ffffff;
+    border-left: 1px solid #e7e9ed;
+    box-shadow: -16px 0 36px rgba(31, 37, 43, 0.12);
     z-index: 20;
     display: flex;
     flex-direction: column;
@@ -975,13 +975,13 @@ svg {
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.25rem;
-    border-bottom: 1px solid #34464e;
+    border-bottom: 1px solid #e7e9ed;
 }
 
 .drawer-title {
     font-size: 1.1rem;
     font-weight: 600;
-    color: #fff;
+    color: #20252b;
     margin: 0;
 }
 
@@ -994,14 +994,14 @@ svg {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 0.35rem;
-    color: var(--lk-text-secondary);
+    color: #747b84;
     cursor: pointer;
 }
 
 .drawer-close:hover {
-    color: #fff;
-    background: #2b3b43;
-    border-color: #465b64;
+    color: #d91f2a;
+    background: #fff0f1;
+    border-color: #ffe0e2;
 }
 
 .drawer-close svg {
@@ -1021,9 +1021,9 @@ svg {
 
 .drawer-invite {
     padding: 1rem;
-    border: 1px solid #3d535a;
-    border-radius: 0.55rem;
-    background: #25363d;
+    border: 1px solid #f2d6d8;
+    border-radius: 8px;
+    background: #fff8f8;
 }
 
 .drawer-invite-heading {
@@ -1040,9 +1040,9 @@ svg {
     flex: 0 0 auto;
     width: 1.8rem;
     height: 1.8rem;
-    border-radius: 0.4rem;
-    color: #d8f07d;
-    background: #354a48;
+    border-radius: 7px;
+    color: #ffffff;
+    background: #f12d36;
 }
 
 .drawer-invite-icon svg {
@@ -1056,13 +1056,13 @@ svg {
 
 .drawer-invite h4 {
     margin: 0 0 0.2rem;
-    color: #f0f5f2;
+    color: #20252b;
     font-size: 0.82rem;
 }
 
 .drawer-invite-heading p {
     margin: 0;
-    color: #9eabb1;
+    color: #747b84;
     font-size: 0.72rem;
     line-height: 1.4;
 }
@@ -1085,17 +1085,17 @@ svg {
     gap: 0.35rem;
     flex: 0 0 auto;
     min-width: 5.1rem;
-    border: 1px solid #9db957;
-    border-radius: 0.4rem;
-    background: #d8f07d;
-    color: #172018;
+    border: 1px solid #f12d36;
+    border-radius: 6px;
+    background: #f12d36;
+    color: #ffffff;
     font-size: 0.76rem;
     font-weight: 800;
     cursor: pointer;
 }
 
 .icon-text-button:hover {
-    background: #c2dc63;
+    background: #d91f2a;
 }
 
 .icon-text-button svg {
@@ -1110,14 +1110,14 @@ svg {
 
 .drawer-invite-status {
     margin: 0.7rem 0 0;
-    color: #bcd781;
+    color: #2f9a69;
     font-size: 0.72rem;
     line-height: 1.45;
 }
 
 .drawer-section-label {
     margin: 1.35rem 0 0.5rem;
-    color: #809199;
+    color: #9ba1a8;
     font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -1128,14 +1128,14 @@ svg {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.7rem 0.5rem;
-    border-bottom: 1px solid #2c3c43;
-    border-radius: 0.4rem;
+    padding: 0.75rem 0.5rem;
+    border-bottom: 1px solid #f0f1f3;
+    border-radius: 6px;
     transition: background 0.15s;
 }
 
 .participant-item:hover {
-    background: #24343b;
+    background: #fff8f8;
 }
 
 .participant-info {
@@ -1148,13 +1148,13 @@ svg {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: #4e6b70;
+    background: #ffd9db;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 0.85rem;
     font-weight: 600;
-    color: white;
+    color: #d91f2a;
 }
 
 .participant-name {
@@ -1164,7 +1164,7 @@ svg {
 
 .participant-badge-you {
     font-size: 0.75rem;
-    color: var(--lk-text-secondary);
+    color: #9ba1a8;
     margin-left: 0.3rem;
 }
 
@@ -1188,13 +1188,13 @@ svg {
 }
 
 .participant-audio-state.is-enabled {
-    color: #a5dbb4;
-    background: #29453b;
+    color: #2f9a69;
+    background: #e9f7ef;
 }
 
 .participant-audio-state.is-muted {
-    color: #efaaa4;
-    background: #432d31;
+    color: #c74750;
+    background: #fff0f1;
 }
 
 /* Invite Modal */

@@ -103,6 +103,21 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         }
     }
 
+    public async Task ReportCallOutcomeAsync(Guid invitationId, string outcome)
+    {
+        var accessToken = await GetAccessTokenAsync();
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            return;
+        }
+
+        await _authClient.ReportCallOutcomeAsync(
+            _serverUrl,
+            accessToken,
+            invitationId,
+            outcome);
+    }
+
     public async ValueTask DisposeAsync()
     {
         _disposed = true;

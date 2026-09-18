@@ -1,0 +1,142 @@
+@page "/calls"
+@attribute [Authorize]
+@layout MainLayout
+@rendermode InteractiveServer
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ICallLogService CallLogs
+@inject NavigationManager Navigation
+
+<PageTitle>wincall - Call history</PageTitle>
+
+<div class="wc-page wc-calls-page">
+    <header class="wc-page-heading">
+        <div>
+            <span class="wc-kicker">Your activity</span>
+            <h1>Call history</h1>
+            <p>Every invitation, declined call, and conversation in one place.</p>
+        </div>
+        <a class="wc-primary-button" href="/contacts">Find someone <span aria-hidden="true">+</span></a>
+    </header>
+
+    <div class="wc-search-bar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+        <input class="wc-input" @bind="searchTerm" @bind:event="oninput" placeholder="Search call history..." autocomplete="off" />
+    </div>
+
+    @if (calls is null)
+    {
+        <div class="wc-empty-state">Loading call history...</div>
+    }
+    else if (!filteredCalls.Any())
+    {
+        <div class="wc-empty-state">
+            <span class="wc-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg></span>
+            <strong>No matching calls</strong>
+            <span>Start a call from your contacts to build your history.</span>
+        </div>
+    }
+    else
+    {
+        <section class="wc-history-list" aria-label="Call history">
+            @foreach (var call in filteredCalls)
+            {
+                <div class="wc-history-row">
+                    <div class="wc-call-person">
+                        <span class="wc-contact-avatar">@GetInitials(call.ContactDisplayName)</span>
+                        <span class="wc-call-person-copy">
+                            <strong>@call.ContactDisplayName</strong>
+                            <small>@(call.IsIncoming ? "Incoming" : "Outgoing") · @GetStatusLabel(call.Status)</small>
+                        </span>
+                    </div>
+                    <div class="wc-history-room">
+                        <span>@call.RoomName</span>
+                        <small>@GetTimeLabel(call.CreatedAtUtc)</small>
+                    </div>
+                    <div class="wc-history-result @GetStatusClass(call.Status)">
+                        <span>@GetCallDetail(call)</span>
+                        <small>@GetStatusLabel(call.Status)</small>
+                    </div>
+                    <button type="button" class="wc-row-call" @onclick="() => CallContact(call.ContactUserName)" aria-label="Call @call.ContactDisplayName" title="Call @call.ContactDisplayName">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
+                    </button>
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<CallLogItem>? calls;
+    private string searchTerm = string.Empty;
+
+    private IEnumerable<CallLogItem> filteredCalls => (calls ?? Array.Empty<CallLogItem>())
+        .Where(call => string.IsNullOrWhiteSpace(searchTerm) ||
+                      call.ContactDisplayName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                      call.ContactUserName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                      call.RoomName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        calls = await CallLogs.GetRecentAsync(authState.User, 100);
+    }
+
+    private void CallContact(string username)
+    {
+        var roomName = $"call-{Guid.NewGuid():N}"[..15];
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true&invite={Uri.EscapeDataString(username)}");
+    }
+
+    private static string GetInitials(string value)
+    {
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length switch
+        {
+            0 => "?",
+            1 => words[0][..1].ToUpperInvariant(),
+            _ => string.Concat(words[0][..1], words[^1][..1]).ToUpperInvariant()
+        };
+    }
+
+    private static string GetStatusLabel(string status) => status switch
+    {
+        CallLogStatuses.Declined => "Declined",
+        CallLogStatuses.Cancelled => "Cancelled",
+        CallLogStatuses.Failed => "Not connected",
+        CallLogStatuses.Ringing => "Calling",
+        CallLogStatuses.Answered or CallLogStatuses.Ended => "Completed",
+        _ => status
+    };
+
+    private static string GetStatusClass(string status) => status.ToLowerInvariant();
+
+    private static string GetCallDetail(CallLogItem call)
+    {
+        if (call.DurationSeconds is int durationSeconds)
+        {
+            return FormatDuration(TimeSpan.FromSeconds(durationSeconds));
+        }
+
+        if (call.AnsweredAtUtc is DateTime answered && call.EndedAtUtc is DateTime ended && ended >= answered)
+        {
+            return FormatDuration(ended - answered);
+        }
+
+        return GetStatusLabel(call.Status);
+    }
+
+    private static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
+        ? duration.ToString(@"h\h\ mm\m")
+        : duration.ToString(@"m\m\ ss\s");
+
+    private static string GetTimeLabel(DateTime createdAtUtc)
+    {
+        var createdAt = createdAtUtc.ToLocalTime();
+        var today = DateTime.Now.Date;
+        return createdAt.Date == today
+            ? createdAt.ToString("h:mm tt")
+            : createdAt.Date == today.AddDays(-1)
+                ? "Yesterday"
+                : createdAt.ToString("MMM d");
+    }
+}

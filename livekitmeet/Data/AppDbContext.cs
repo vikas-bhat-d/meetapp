@@ -11,6 +11,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
     public DbSet<PushDevice> PushDevices => Set<PushDevice>();
+    public DbSet<CallLog> CallLogs => Set<CallLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -48,6 +49,26 @@ public sealed class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(device => device.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CallLog>(entity =>
+        {
+            entity.HasKey(log => log.Id);
+            entity.Property(log => log.RoomName).HasMaxLength(200).IsRequired();
+            entity.Property(log => log.RoomUrl).HasMaxLength(2048).IsRequired();
+            entity.Property(log => log.Status).HasMaxLength(32).IsRequired();
+            entity.HasIndex(log => log.InvitationId).IsUnique();
+            entity.HasIndex(log => log.CallerId);
+            entity.HasIndex(log => log.RecipientId);
+            entity.HasIndex(log => log.CreatedAtUtc);
+            entity.HasOne(log => log.Caller)
+                .WithMany()
+                .HasForeignKey(log => log.CallerId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(log => log.Recipient)
+                .WithMany()
+                .HasForeignKey(log => log.RecipientId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

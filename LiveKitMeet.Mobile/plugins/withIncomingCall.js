@@ -305,6 +305,17 @@ class IncomingCallActivity : Activity() {
 
   private fun declineCall() {
     IncomingCallNotification.dismiss(this, invitationId)
+    val deepLink = Uri.Builder()
+      .scheme("livekitmeet")
+      .authority("incoming")
+      .appendQueryParameter("action", "decline")
+      .appendQueryParameter("invitationId", invitationId)
+      .build()
+    startActivity(Intent(this, MainActivity::class.java).apply {
+      action = Intent.ACTION_VIEW
+      data = deepLink
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    })
     finish()
   }
 

@@ -2,12 +2,14 @@
 @layout EmptyLayout
 @rendermode InteractiveServer
 
-<PageTitle>Sign in - LiveKit Meet</PageTitle>
+<PageTitle>Sign in - wincall</PageTitle>
 
-<div class="lobby-container">
-    <div class="lobby-card">
-        <h1 class="lobby-title">LiveKit Meet</h1>
-        <p class="lobby-subtitle">Sign in with the account created by your administrator.</p>
+<div class="wc-auth-page">
+    <div class="wc-auth-card">
+        <div class="wc-auth-brand"><span class="wc-auth-brand-mark">w</span><strong>wincall</strong></div>
+        <span class="wc-kicker">Welcome back</span>
+        <h1>Sign in to your workspace</h1>
+        <p>Use the account created by your administrator.</p>
 
         @if (!string.IsNullOrWhiteSpace(ErrorMessage))
         {
@@ -22,7 +24,7 @@
             <div class="auth-alert auth-alert-success">You have been signed out.</div>
         }
 
-        <form method="post" action="/api/auth/login">
+        <form method="post" action="/api/auth/login" class="wc-auth-form">
             <input type="hidden" name="returnUrl" value="@SafeReturnUrl" />
             <div class="form-group">
                 <label class="form-label" for="username">Username</label>
@@ -32,7 +34,7 @@
                 <label class="form-label" for="password">Password</label>
                 <input id="password" name="password" type="password" class="form-input" autocomplete="current-password" required />
             </div>
-            <button type="submit" class="btn-primary">Sign in</button>
+            <button type="submit" class="wc-primary-button">Sign in</button>
         </form>
     </div>
 </div>

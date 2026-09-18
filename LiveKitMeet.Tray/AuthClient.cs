@@ -37,6 +37,22 @@ public sealed class AuthClient : IDisposable
                ?? throw new InvalidOperationException("The server returned an empty refresh response.");
     }
 
+    public async Task<bool> ReportCallOutcomeAsync(
+        string serverUrl,
+        string accessToken,
+        Guid invitationId,
+        string outcome,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUrl = NormalizeServerUrl(serverUrl);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl}/api/call-invitations/{invitationId:D}/{Uri.EscapeDataString(outcome)}");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
     public static string NormalizeServerUrl(string serverUrl)
     {
         if (!Uri.TryCreate(serverUrl.Trim(), UriKind.Absolute, out var uri) ||

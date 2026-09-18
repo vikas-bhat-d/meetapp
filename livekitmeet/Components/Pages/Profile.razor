@@ -2,38 +2,89 @@
 @attribute [Authorize]
 @layout MainLayout
 @rendermode InteractiveServer
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
-<PageTitle>My profile - LiveKit Meet</PageTitle>
+<PageTitle>wincall - Profile</PageTitle>
 
-<div class="admin-page">
-    <div class="admin-header">
+<div class="wc-page wc-profile-page">
+    <header class="wc-page-heading">
         <div>
-            <h1>My profile</h1>
-            <p>Change your password. All existing sessions will be signed out after the change.</p>
+            <span class="wc-kicker">Account</span>
+            <h1>Profile</h1>
+            <p>Keep your account details and sign-in settings up to date.</p>
         </div>
-    </div>
+    </header>
 
     @if (!string.IsNullOrWhiteSpace(Error))
     {
         <div class="auth-alert auth-alert-error">@Error</div>
     }
 
-    <div class="admin-card profile-card">
-        <form method="post" action="/api/auth/change-password">
-            <div class="form-group">
-                <label class="form-label" for="currentPassword">Current password</label>
-                <input id="currentPassword" name="currentPassword" type="password" class="form-input" autocomplete="current-password" required />
+    <div class="wc-profile-grid">
+        <section class="wc-profile-card wc-profile-identity">
+            <span class="wc-profile-avatar">@GetInitials(displayName)</span>
+            <h2>@displayName</h2>
+            <p>@userName</p>
+            <span class="wc-profile-status"><span></span> Active account</span>
+            <form method="post" action="/api/auth/logout" class="wc-profile-signout-form">
+                <button type="submit" class="wc-secondary-button wc-profile-signout-button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>
+                    <span>Sign out</span>
+                </button>
+            </form>
+        </section>
+
+        <section class="wc-profile-card">
+            <div class="wc-panel-heading">
+                <span class="wc-panel-icon wc-panel-icon-red" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+                </span>
+                <div>
+                    <span class="wc-panel-label">Security</span>
+                    <h2>Change password</h2>
+                    <p>Existing sessions will be signed out after your password changes.</p>
+                </div>
             </div>
-            <div class="form-group">
-                <label class="form-label" for="newPassword">New password</label>
-                <input id="newPassword" name="newPassword" type="password" class="form-input" minlength="8" autocomplete="new-password" required />
-            </div>
-            <button type="submit" class="btn-primary">Change password</button>
-        </form>
+
+            <form method="post" action="/api/auth/change-password" class="wc-profile-form">
+                <div class="form-group">
+                    <label class="form-label" for="currentPassword">Current password</label>
+                    <input id="currentPassword" name="currentPassword" type="password" class="form-input" autocomplete="current-password" required />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="newPassword">New password</label>
+                    <input id="newPassword" name="newPassword" type="password" class="form-input" minlength="8" autocomplete="new-password" required />
+                </div>
+                <button type="submit" class="wc-primary-button">Update password</button>
+            </form>
+        </section>
     </div>
 </div>
 
 @code {
     [SupplyParameterFromQuery(Name = "error")]
     public string? Error { get; set; }
+
+    private string displayName = "Your profile";
+    private string userName = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        displayName = authState.User.FindFirst("display_name")?.Value?.Trim() ??
+                      authState.User.Identity?.Name?.Trim() ??
+                      "Your profile";
+        userName = authState.User.Identity?.Name?.Trim() ?? string.Empty;
+    }
+
+    private static string GetInitials(string value)
+    {
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length switch
+        {
+            0 => "?",
+            1 => words[0][..1].ToUpperInvariant(),
+            _ => string.Concat(words[0][..1], words[^1][..1]).ToUpperInvariant()
+        };
+    }
 }

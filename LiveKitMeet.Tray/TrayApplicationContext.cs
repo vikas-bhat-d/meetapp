@@ -125,7 +125,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         return Task.CompletedTask;
     }
 
-    private void ShowIncomingCall(CallInvitationMessage invitation)
+    private async void ShowIncomingCall(CallInvitationMessage invitation)
     {
         SystemSounds.Exclamation.Play();
         _notifyIcon.ShowBalloonTip(3000, "Incoming LiveKit call", $"{invitation.FromDisplayName} is calling you.", ToolTipIcon.Info);
@@ -133,7 +133,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         using var form = new IncomingCallForm(invitation);
         if (form.ShowDialog() == DialogResult.OK)
         {
+            await ReportCallOutcomeAsync(invitation, "accept");
             OpenRoomUrl(invitation.RoomUrl);
+        }
+        else
+        {
+            await ReportCallOutcomeAsync(invitation, "decline");
+        }
+    }
+
+    private async Task ReportCallOutcomeAsync(CallInvitationMessage invitation, string outcome)
+    {
+        try
+        {
+            if (_invitationClient is not null)
+            {
+                await _invitationClient.ReportCallOutcomeAsync(invitation.InvitationId, outcome);
+            }
+        }
+        catch
+        {
         }
     }
 

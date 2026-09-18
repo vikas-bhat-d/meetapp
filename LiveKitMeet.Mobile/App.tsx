@@ -39,6 +39,7 @@ type PushData = {
   roomUrl?: string;
   roomName?: string;
   invitationId?: string;
+  callUUID?: string;
   fromDisplayName?: string;
   fromUserName?: string;
   callerDisplayName?: string;
@@ -156,7 +157,7 @@ type IncomingCall = PushData & {
 const defaultServerUrl =
   process.env.EXPO_PUBLIC_SERVER_URL ??
   (Constants.expoConfig?.extra?.serverUrl as string | undefined) ??
-    'https://192.168.1.6:8443';
+    'https://192.168.29.214:8443';
 
 const SERVER_URL_STORAGE_KEY = 'livekitmeet.serverUrl';
 
@@ -179,7 +180,7 @@ function normalizeServerUrl(value: unknown): string | null {
   }
 }
 
-const DEFAULT_SERVER_URL = normalizeServerUrl(defaultServerUrl) ?? 'https://192.168.1.6:8443';
+const DEFAULT_SERVER_URL = normalizeServerUrl(defaultServerUrl) ?? 'https://192.168.29.214:8443';
 
 function isHttpUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 2048) {
@@ -372,6 +373,7 @@ export default function App() {
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const incomingNotificationIdRef = useRef<string | null>(null);
+  const pendingCallOutcomeRef = useRef<{ invitationId: string; outcome: 'accept' | 'decline' | 'end' } | null>(null);
 
   const requestMediaAccess = useCallback(async (): Promise<MediaPermissionResult> => {
     setIsRequestingMediaPermissions(true);
@@ -536,6 +538,36 @@ export default function App() {
     }
   }, [serverUrl]);
 
+  const reportCallOutcome = useCallback((invitationId: string | undefined, outcome: 'accept' | 'decline' | 'end') => {
+    if (!invitationId) {
+      return;
+    }
+
+    if (!hasLoadedDocumentRef.current) {
+      pendingCallOutcomeRef.current = { invitationId, outcome };
+      return;
+    }
+
+    const endpoint = `/api/call-invitations/${encodeURIComponent(invitationId)}/${outcome}`;
+    webViewRef.current?.injectJavaScript(`
+      fetch(${JSON.stringify(endpoint)}, {
+        method: 'POST',
+        credentials: 'include'
+      }).catch(() => undefined);
+      true;
+    `);
+  }, []);
+
+  const flushPendingCallOutcome = useCallback(() => {
+    const pending = pendingCallOutcomeRef.current;
+    if (!pending || !hasLoadedDocumentRef.current) {
+      return;
+    }
+
+    pendingCallOutcomeRef.current = null;
+    reportCallOutcome(pending.invitationId, pending.outcome);
+  }, [reportCallOutcome]);
+
   const stopIncomingRing = useCallback(() => {
     const invitationId = incomingCallRef.current?.invitationId;
     if (Platform.OS === 'android') {
@@ -596,13 +628,22 @@ export default function App() {
 
   const acceptIncomingCall = useCallback(() => {
     const call = incomingCall;
+    reportCallOutcome(call?.invitationId ?? call?.callUUID, 'accept');
     stopIncomingRing();
     openNotificationRoom(call ?? undefined);
-  }, [incomingCall, openNotificationRoom, stopIncomingRing]);
+  }, [incomingCall, openNotificationRoom, reportCallOutcome, stopIncomingRing]);
+
+  const declineIncomingCall = useCallback(() => {
+    reportCallOutcome(
+      incomingCallRef.current?.invitationId ?? incomingCallRef.current?.callUUID,
+      'decline');
+    stopIncomingRing();
+  }, [reportCallOutcome, stopIncomingRing]);
 
   const handleNotificationResponse = useCallback((response: Notifications.NotificationResponse) => {
     const data = response.notification.request.content.data as PushData;
     if (response.actionIdentifier === 'DECLINE_CALL') {
+      reportCallOutcome(data.invitationId ?? data.callUUID, 'decline');
       stopIncomingRing();
       return;
     }
@@ -614,7 +655,7 @@ export default function App() {
 
     stopIncomingRing();
     openNotificationRoom(data);
-  }, [openNotificationRoom, stopIncomingRing]);
+  }, [openNotificationRoom, reportCallOutcome, stopIncomingRing]);
 
   useEffect(() => {
     registerForPushNotificationsAsync()
@@ -631,14 +672,23 @@ export default function App() {
       if (!deepLink) return;
       try {
         let extracted: string | null = null;
+        let action: string | null = null;
+        let invitationId: string | null = null;
         try {
           const parsed = new URL(deepLink);
           extracted = parsed.searchParams.get('roomUrl');
+          action = parsed.searchParams.get('action');
+          invitationId = parsed.searchParams.get('invitationId');
         } catch {
           const match = deepLink.match(/[?&]roomUrl=([^&]+)/);
           if (match && match[1]) {
             extracted = decodeURIComponent(match[1]);
           }
+        }
+        if (action === 'decline') {
+          reportCallOutcome(invitationId ?? undefined, 'decline');
+          stopIncomingRing();
+          return;
         }
         if (extracted) {
           stopIncomingRing();
@@ -667,7 +717,7 @@ export default function App() {
       responseSubscription.remove();
       stopIncomingRing();
     };
-  }, [handleIncomingNotification, handleNotificationResponse, stopIncomingRing]);
+  }, [handleIncomingNotification, handleNotificationResponse, reportCallOutcome, stopIncomingRing]);
 
   useEffect(() => {
     if (!pushRegistrationScript) {
@@ -813,7 +863,7 @@ export default function App() {
               <Text style={styles.incomingCallRoom}>{incomingCall.roomName ?? 'LiveKit meeting'}</Text>
               <Text style={styles.incomingCallBody}>{incomingCall.body}</Text>
               <View style={styles.incomingCallActions}>
-                <Pressable style={[styles.callActionButton, styles.declineCallButton]} onPress={stopIncomingRing}>
+                <Pressable style={[styles.callActionButton, styles.declineCallButton]} onPress={declineIncomingCall}>
                   <Text style={styles.callActionText}>Decline</Text>
                 </Pressable>
                 <Pressable style={[styles.callActionButton, styles.answerCallButton]} onPress={acceptIncomingCall}>
@@ -865,6 +915,7 @@ export default function App() {
           if (pushRegistrationScript) {
             webViewRef.current?.injectJavaScript(pushRegistrationScript);
           }
+          flushPendingCallOutcome();
         }}
         onNavigationStateChange={handleNavigation}
         onError={event => {
@@ -896,7 +947,7 @@ export default function App() {
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
-              placeholder="https://192.168.1.6:8443"
+              placeholder="https://192.168.29.214:8443"
               placeholderTextColor="#7d8aa8"
               style={styles.settingsInput}
             />

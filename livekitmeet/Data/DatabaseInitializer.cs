@@ -11,6 +11,7 @@ public static class DatabaseInitializer
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.EnsureCreatedAsync();
         await EnsurePushDevicesTableAsync(db);
+        await EnsureCallLogsTableAsync(db);
 
         var adminUserName = configuration["Admin:UserName"]?.Trim();
         var adminPassword = configuration["Admin:Password"];
@@ -91,6 +92,115 @@ public static class DatabaseInitializer
                         ON [PushDevices] ([UserId]);
                 END
                 """);
+        }
+    }
+
+    private static async Task EnsureCallLogsTableAsync(AppDbContext db)
+    {
+        if (db.Database.IsSqlite())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS "CallLogs" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_CallLogs" PRIMARY KEY,
+                    "InvitationId" TEXT NOT NULL,
+                    "CallerId" TEXT NOT NULL,
+                    "RecipientId" TEXT NOT NULL,
+                    "RoomName" TEXT NOT NULL,
+                    "RoomUrl" TEXT NOT NULL,
+                    "Status" TEXT NOT NULL,
+                    "CreatedAtUtc" TEXT NOT NULL,
+                    "AnsweredAtUtc" TEXT NULL,
+                    "EndedAtUtc" TEXT NULL,
+                    "DurationSeconds" INTEGER NULL,
+                    CONSTRAINT "FK_CallLogs_Caller" FOREIGN KEY ("CallerId")
+                        REFERENCES "Users" ("Id") ON DELETE RESTRICT,
+                    CONSTRAINT "FK_CallLogs_Recipient" FOREIGN KEY ("RecipientId")
+                        REFERENCES "Users" ("Id") ON DELETE RESTRICT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_CallLogs_InvitationId"
+                    ON "CallLogs" ("InvitationId");
+                CREATE INDEX IF NOT EXISTS "IX_CallLogs_CallerId"
+                    ON "CallLogs" ("CallerId");
+                CREATE INDEX IF NOT EXISTS "IX_CallLogs_RecipientId"
+                    ON "CallLogs" ("RecipientId");
+                CREATE INDEX IF NOT EXISTS "IX_CallLogs_CreatedAtUtc"
+                    ON "CallLogs" ("CreatedAtUtc");
+                """);
+            await EnsureSqliteCallLogDurationColumnAsync(db);
+            return;
+        }
+
+        if (db.Database.IsSqlServer())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                IF OBJECT_ID(N'[CallLogs]', N'U') IS NULL
+                BEGIN
+                    CREATE TABLE [CallLogs] (
+                        [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_CallLogs] PRIMARY KEY,
+                        [InvitationId] uniqueidentifier NOT NULL,
+                        [CallerId] uniqueidentifier NOT NULL,
+                        [RecipientId] uniqueidentifier NOT NULL,
+                        [RoomName] nvarchar(200) NOT NULL,
+                        [RoomUrl] nvarchar(2048) NOT NULL,
+                        [Status] nvarchar(32) NOT NULL,
+                        [CreatedAtUtc] datetime2 NOT NULL,
+                        [AnsweredAtUtc] datetime2 NULL,
+                        [EndedAtUtc] datetime2 NULL,
+                        [DurationSeconds] int NULL,
+                        CONSTRAINT [FK_CallLogs_Caller]
+                            FOREIGN KEY ([CallerId]) REFERENCES [Users] ([Id]) ON DELETE NO ACTION,
+                        CONSTRAINT [FK_CallLogs_Recipient]
+                            FOREIGN KEY ([RecipientId]) REFERENCES [Users] ([Id]) ON DELETE NO ACTION
+                    );
+                    CREATE UNIQUE INDEX [IX_CallLogs_InvitationId]
+                        ON [CallLogs] ([InvitationId]);
+                    CREATE INDEX [IX_CallLogs_CallerId]
+                        ON [CallLogs] ([CallerId]);
+                    CREATE INDEX [IX_CallLogs_RecipientId]
+                        ON [CallLogs] ([RecipientId]);
+                    CREATE INDEX [IX_CallLogs_CreatedAtUtc]
+                        ON [CallLogs] ([CreatedAtUtc]);
+                END
+                """);
+
+            await db.Database.ExecuteSqlRawAsync("""
+                IF COL_LENGTH(N'CallLogs', N'DurationSeconds') IS NULL
+                BEGIN
+                    ALTER TABLE [CallLogs] ADD [DurationSeconds] int NULL;
+                END
+                """);
+        }
+    }
+
+    private static async Task EnsureSqliteCallLogDurationColumnAsync(AppDbContext db)
+    {
+        var connection = db.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        try
+        {
+            await using var checkCommand = connection.CreateCommand();
+            checkCommand.CommandText = "SELECT COUNT(*) FROM pragma_table_info('CallLogs') WHERE name = 'DurationSeconds';";
+            var columnExists = Convert.ToInt32(await checkCommand.ExecuteScalarAsync()) > 0;
+            if (columnExists)
+            {
+                return;
+            }
+
+            await using var alterCommand = connection.CreateCommand();
+            alterCommand.CommandText = "ALTER TABLE \"CallLogs\" ADD COLUMN \"DurationSeconds\" INTEGER NULL;";
+            await alterCommand.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            if (!wasOpen)
+            {
+                await connection.CloseAsync();
+            }
         }
     }
 }

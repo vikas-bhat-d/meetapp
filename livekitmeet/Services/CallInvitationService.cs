@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using livekitmeet.Data;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 
 namespace livekitmeet.Services;
@@ -23,7 +24,6 @@ public interface ICallInvitationService
 
     Task<bool> CancelAsync(
         ClaimsPrincipal caller,
-        string targetUserName,
         Guid invitationId,
         CancellationToken cancellationToken = default);
 }
@@ -34,17 +34,20 @@ public sealed class CallInvitationService : ICallInvitationService
     private readonly IHubContext<CallInvitationHub> _hub;
     private readonly CallInvitationConnectionTracker _tracker;
     private readonly IFirebasePushNotificationService _pushNotifications;
+    private readonly ICallLogService _callLogs;
 
     public CallInvitationService(
         AppDbContext db,
         IHubContext<CallInvitationHub> hub,
         CallInvitationConnectionTracker tracker,
-        IFirebasePushNotificationService pushNotifications)
+        IFirebasePushNotificationService pushNotifications,
+        ICallLogService callLogs)
     {
         _db = db;
         _hub = hub;
         _tracker = tracker;
         _pushNotifications = pushNotifications;
+        _callLogs = callLogs;
     }
 
     public async Task<CallInvitationResult> SendAsync(
@@ -83,15 +86,24 @@ public sealed class CallInvitationService : ICallInvitationService
         }
         var fromUserName = caller.FindFirstValue(ClaimTypes.Name) ?? "User";
         var fromDisplayName = caller.FindFirst("display_name")?.Value ?? fromUserName;
+        var invitationId = Guid.NewGuid();
         var invitation = new CallInvitationMessage(
-            Guid.NewGuid(),
+            invitationId,
             roomName,
-            roomUrl,
+            QueryHelpers.AddQueryString(roomUrl, "invitationId", invitationId.ToString()),
             fromUserName,
             fromDisplayName,
             audioEnabled,
             videoEnabled,
             DateTime.UtcNow.AddMinutes(2));
+
+        await _callLogs.CreateAsync(
+            invitation.InvitationId,
+            callerId,
+            target.Id,
+            invitation.RoomName,
+            invitation.RoomUrl,
+            cancellationToken);
 
         var deliveredToTray = _tracker.IsConnected(target.Id);
         if (deliveredToTray)
@@ -124,6 +136,7 @@ public sealed class CallInvitationService : ICallInvitationService
 
         if (!deliveredToTray && pushResult.DeliveredCount == 0)
         {
+            await _callLogs.MarkFailedAsync(invitation.InvitationId, cancellationToken);
             if (pushResult.RegisteredCount == 0)
             {
                 return CallInvitationResult.Failed(
@@ -145,31 +158,32 @@ public sealed class CallInvitationService : ICallInvitationService
 
     public async Task<bool> CancelAsync(
         ClaimsPrincipal caller,
-        string targetUserName,
         Guid invitationId,
         CancellationToken cancellationToken = default)
     {
-        targetUserName = targetUserName.Trim();
-        if (string.IsNullOrWhiteSpace(targetUserName))
+        var callerIdValue = caller.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(callerIdValue, out var callerId))
         {
             return false;
         }
 
-        var target = await _db.Users
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                user => user.NormalizedUserName == UserNameNormalizer.Normalize(targetUserName) && user.IsActive,
-                cancellationToken);
-        if (target is null)
+        var log = await _db.CallLogs.SingleOrDefaultAsync(
+            candidate => candidate.InvitationId == invitationId && candidate.CallerId == callerId,
+            cancellationToken);
+        if (log is null || log.Status != CallLogStatuses.Ringing)
         {
             return false;
         }
+
+        log.Status = CallLogStatuses.Cancelled;
+        log.EndedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
 
         await _hub.Clients
-            .Group(CallInvitationHub.UserGroup(target.Id))
+            .Group(CallInvitationHub.UserGroup(log.RecipientId))
             .SendAsync("CallCancelled", invitationId, cancellationToken);
 
-        await _pushNotifications.SendCancelAsync(target.Id, invitationId, cancellationToken);
+        await _pushNotifications.SendCancelAsync(log.RecipientId, invitationId, cancellationToken);
         return true;
     }
 }

@@ -87,6 +87,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserAdministrationService, UserAdministrationService>();
 builder.Services.AddSingleton<CallInvitationConnectionTracker>();
 builder.Services.AddScoped<ICallInvitationService, CallInvitationService>();
+builder.Services.AddScoped<ICallLogService, CallLogService>();
 builder.Services.AddScoped<IFirebasePushNotificationService, FirebasePushNotificationService>();
 builder.Services.AddSingleton<ILiveKitTokenService, LiveKitTokenService>();
 
@@ -371,6 +372,42 @@ app.MapPost("/api/auth/change-password", async (HttpContext context, IAuthServic
 
     authService.ClearAuthCookies(context);
     return Results.Redirect("/login?changed=1");
+}).RequireAuthorization();
+
+app.MapPost("/api/call-invitations/{invitationId:guid}/accept", async (
+    Guid invitationId,
+    HttpContext context,
+    ICallLogService callLogs) =>
+{
+    var accepted = await callLogs.MarkAnsweredAsync(
+        context.User,
+        invitationId,
+        context.RequestAborted);
+    return accepted ? Results.NoContent() : Results.NotFound();
+}).RequireAuthorization();
+
+app.MapPost("/api/call-invitations/{invitationId:guid}/decline", async (
+    Guid invitationId,
+    HttpContext context,
+    ICallLogService callLogs) =>
+{
+    var declined = await callLogs.MarkDeclinedAsync(
+        context.User,
+        invitationId,
+        context.RequestAborted);
+    return declined ? Results.NoContent() : Results.NotFound();
+}).RequireAuthorization();
+
+app.MapPost("/api/call-invitations/{invitationId:guid}/end", async (
+    Guid invitationId,
+    HttpContext context,
+    ICallLogService callLogs) =>
+{
+    var ended = await callLogs.MarkEndedAsync(
+        context.User,
+        invitationId,
+        context.RequestAborted);
+    return ended ? Results.NoContent() : Results.NotFound();
 }).RequireAuthorization();
 
 app.MapGet("/api/connection-details", (
