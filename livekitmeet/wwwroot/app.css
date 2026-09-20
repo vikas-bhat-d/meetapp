@@ -323,8 +323,13 @@ input:focus-visible {
 
 .wc-dashboard-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.18fr) minmax(260px, 0.82fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
+}
+
+.wc-call-panel {
+    width: min(100%, 760px);
+    margin-inline: auto;
 }
 
 .wc-panel {
@@ -342,14 +347,12 @@ input:focus-visible {
     gap: 0.85rem;
 }
 
-.wc-panel-heading h2,
-.wc-status-panel h2 {
+.wc-panel-heading h2 {
     margin-top: 0.3rem;
     font-size: 1.25rem;
 }
 
 .wc-panel-icon,
-.wc-status-mark,
 .wc-empty-icon {
     display: inline-flex;
     align-items: center;
@@ -363,7 +366,6 @@ input:focus-visible {
 }
 
 .wc-panel-icon svg,
-.wc-status-mark svg,
 .wc-empty-icon svg,
 .wc-primary-icon-button svg,
 .wc-row-call svg,
@@ -387,6 +389,12 @@ input:focus-visible {
 
 .wc-call-form {
     margin-top: 1.75rem;
+}
+
+.wc-call-status {
+    margin: 0.75rem 0 0;
+    color: var(--wc-red-dark);
+    font-size: 0.75rem;
 }
 
 .wc-field-label {
@@ -479,21 +487,6 @@ input:focus-visible {
 
 .wc-text-link:hover {
     color: var(--wc-red);
-}
-
-.wc-status-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    background: #fff9f9;
-    border-color: #f5dfe1;
-}
-
-.wc-status-mark {
-    color: #bd4a51;
-    background: #ffe4e5;
 }
 
 .wc-secondary-button,
@@ -1152,8 +1145,7 @@ input:focus-visible {
         padding: 1rem;
     }
 
-    .wc-panel-heading h2,
-    .wc-status-panel h2 {
+    .wc-panel-heading h2 {
         font-size: 1.08rem;
     }
 

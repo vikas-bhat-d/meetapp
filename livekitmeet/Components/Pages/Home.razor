@@ -5,6 +5,7 @@
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ICallLogService CallLogs
+@inject ICallInvitationService CallInvitationService
 
 <PageTitle>wincall - Home</PageTitle>
 
@@ -43,25 +44,18 @@
                 <div class="wc-call-input-wrap">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
                     <input id="callUsername" class="wc-input" @bind="targetUsername" @bind:event="oninput" placeholder="e.g. ananya" autocomplete="off" />
-                    <button type="submit" class="wc-call-button" disabled="@string.IsNullOrWhiteSpace(targetUsername)" aria-label="Call user" title="Call user">
+                    <button type="submit" class="wc-call-button" disabled="@(string.IsNullOrWhiteSpace(targetUsername) || isStartingCall)" aria-label="Call user" title="Call user">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
                     </button>
                 </div>
                 <a class="wc-text-link" href="/contacts">Browse all contacts <span aria-hidden="true">&rarr;</span></a>
+                @if (!string.IsNullOrWhiteSpace(callStatusMessage))
+                {
+                    <p class="wc-call-status" role="status">@callStatusMessage</p>
+                }
             </form>
         </section>
 
-        <section class="wc-panel wc-status-panel">
-            <div class="wc-status-mark" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9" /><path d="M12 7v5l3 2" /><path d="m16 4 2-1 1 2" /></svg>
-            </div>
-            <div>
-                <span class="wc-panel-label">Your space</span>
-                <h2>Ready when you are</h2>
-                <p>Every room is kept in your history, including invitation outcomes.</p>
-            </div>
-            <a class="wc-secondary-button" href="/calls">View call history</a>
-        </section>
     </div>
 
     <section class="wc-recent-section">
@@ -117,6 +111,8 @@
     private string displayName = "there";
     private string firstName = "there";
     private string targetUsername = string.Empty;
+    private string callStatusMessage = string.Empty;
+    private bool isStartingCall;
 
     protected override async Task OnInitializedAsync()
     {
@@ -125,19 +121,36 @@
                       authState.User.Identity?.Name?.Trim() ??
                       "there";
         firstName = displayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? displayName;
-        recentCalls = await CallLogs.GetRecentAsync(authState.User, 10);
+        recentCalls = (await CallLogs.GetRecentAsync(authState.User, 1, 10)).Items;
     }
 
-    private void StartCall()
+    private async Task StartCall()
     {
-        CallContact(targetUsername);
+        await CallContactAsync(targetUsername);
     }
 
-    private void CallContact(string username)
+    private async Task CallContactAsync(string username)
     {
         if (string.IsNullOrWhiteSpace(username))
         {
             return;
+        }
+
+        isStartingCall = true;
+        callStatusMessage = string.Empty;
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var availability = await CallInvitationService.CheckAvailabilityAsync(authState.User, username.Trim());
+            if (!availability.Available)
+            {
+                callStatusMessage = availability.Error ?? "That user is not currently available.";
+                return;
+            }
+        }
+        finally
+        {
+            isStartingCall = false;
         }
 
         var roomName = $"call-{Guid.NewGuid():N}"[..15];

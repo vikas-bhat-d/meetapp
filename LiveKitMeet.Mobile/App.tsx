@@ -562,8 +562,11 @@ export default function App() {
     }
 
     const payload = JSON.stringify({ token: pushToken, platform: 'android' });
+    const token = JSON.stringify(pushToken);
     return `
       (async function () {
+        const fcmToken = ${token};
+
         try {
           const response = await fetch('/api/devices/fcm', {
             method: 'POST',
@@ -581,6 +584,31 @@ export default function App() {
             status: 0
           }));
         }
+
+        document.querySelectorAll('form').forEach(function (form) {
+          const action = new URL(form.action || window.location.href, window.location.href);
+          if (action.pathname !== '/api/auth/logout' || form.dataset.fcmLogoutHooked === 'true') {
+            return;
+          }
+
+          form.dataset.fcmLogoutHooked = 'true';
+          form.addEventListener('submit', function (event) {
+            if (form.dataset.fcmLogoutSubmitting === 'true') {
+              return;
+            }
+
+            event.preventDefault();
+            form.dataset.fcmLogoutSubmitting = 'true';
+            fetch('/api/devices/fcm/unregister', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: fcmToken, platform: 'android' })
+            }).catch(function () {}).finally(function () {
+              form.submit();
+            });
+          });
+        });
       })();
       true;
     `;

@@ -61,6 +61,15 @@ public sealed record CallRoomHistoryItem(
     IReadOnlyList<CallParticipantLogItem> Participants,
     IReadOnlyList<CallInvitationLogItem> Invitations);
 
+public sealed record PagedResult<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalCount)
+{
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(TotalCount / (double)PageSize));
+}
+
 public interface ICallLogService
 {
     Task<CallLog> CreateAsync(
@@ -102,19 +111,23 @@ public interface ICallLogService
         Guid invitationId,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<CallLogItem>> GetRecentAsync(
+    Task<PagedResult<CallLogItem>> GetRecentAsync(
         ClaimsPrincipal user,
-        int limit = 50,
+        int page = 1,
+        int pageSize = 20,
+        string? searchTerm = null,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<CallRoomHistoryItem>> GetRecentRoomLogsAsync(
+    Task<PagedResult<CallRoomHistoryItem>> GetRecentRoomLogsAsync(
         ClaimsPrincipal user,
-        int limit = 50,
+        int page = 1,
+        int pageSize = 20,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<AdminCallRoomLogItem>> GetAdminRoomLogsAsync(
+    Task<PagedResult<AdminCallRoomLogItem>> GetAdminRoomLogsAsync(
         ClaimsPrincipal user,
-        int limit = 100,
+        int page = 1,
+        int pageSize = 20,
         CancellationToken cancellationToken = default);
 }
 
@@ -606,22 +619,54 @@ public sealed class CallLogService : ICallLogService
         return updated > 0;
     }
 
-    public async Task<IReadOnlyList<CallLogItem>> GetRecentAsync(
+    public async Task<PagedResult<CallLogItem>> GetRecentAsync(
         ClaimsPrincipal user,
-        int limit = 50,
+        int page = 1,
+        int pageSize = 20,
+        string? searchTerm = null,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetUserId(user, out var userId))
         {
-            return Array.Empty<CallLogItem>();
+            return new PagedResult<CallLogItem>(Array.Empty<CallLogItem>(), 1, 20, 0);
         }
 
-        limit = Math.Clamp(limit, 1, 100);
-        return await _db.CallLogs
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        searchTerm = searchTerm?.Trim();
+        var query = _db.CallLogs
             .AsNoTracking()
-            .Where(log => log.CallerId == userId || log.RecipientId == userId)
+            .Where(log => log.CallerId == userId || log.RecipientId == userId);
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var searchPattern = $"%{searchTerm}%";
+            var status = searchTerm.ToLowerInvariant() switch
+            {
+                "declined" => CallLogStatuses.Declined,
+                "cancelled" => CallLogStatuses.Cancelled,
+                "not connected" => CallLogStatuses.NotConnected,
+                "not received" => CallLogStatuses.NotReceived,
+                "delivery failed" => CallLogStatuses.Failed,
+                "calling" => CallLogStatuses.Ringing,
+                "accepted" => CallLogStatuses.Answered,
+                "completed" => CallLogStatuses.Ended,
+                _ => null
+            };
+
+            query = query.Where(log =>
+                EF.Functions.Like(log.RoomName, searchPattern) ||
+                EF.Functions.Like(log.Caller.DisplayName, searchPattern) ||
+                EF.Functions.Like(log.Caller.UserName, searchPattern) ||
+                EF.Functions.Like(log.Recipient.DisplayName, searchPattern) ||
+                EF.Functions.Like(log.Recipient.UserName, searchPattern) ||
+                (status != null && log.Status == status));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var items = await query
             .OrderByDescending(log => log.CreatedAtUtc)
-            .Take(limit)
+            .Skip((int)Math.Min(int.MaxValue, (long)(page - 1) * pageSize))
+            .Take(pageSize)
             .Select(log => new CallLogItem(
                 log.Id,
                 log.InvitationId,
@@ -635,28 +680,35 @@ public sealed class CallLogService : ICallLogService
                 log.EndedAtUtc,
                 log.DurationSeconds))
             .ToListAsync(cancellationToken);
+
+        return new PagedResult<CallLogItem>(items, page, pageSize, totalCount);
     }
 
-    public async Task<IReadOnlyList<CallRoomHistoryItem>> GetRecentRoomLogsAsync(
+    public async Task<PagedResult<CallRoomHistoryItem>> GetRecentRoomLogsAsync(
         ClaimsPrincipal user,
-        int limit = 50,
+        int page = 1,
+        int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetUserId(user, out var userId))
         {
-            return Array.Empty<CallRoomHistoryItem>();
+            return new PagedResult<CallRoomHistoryItem>(Array.Empty<CallRoomHistoryItem>(), 1, 20, 0);
         }
 
-        limit = Math.Clamp(limit, 1, 100);
-        var rooms = await _db.CallRoomLogs
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var roomsQuery = _db.CallRoomLogs
             .AsNoTracking()
             .Include(room => room.Participants)
                 .ThenInclude(session => session.User)
             .Where(room => room.Participants.Any(session => session.UserId == userId) ||
                            _db.CallLogs.Any(log => log.RoomName == room.RoomName &&
-                                                   (log.CallerId == userId || log.RecipientId == userId)))
+                                                   (log.CallerId == userId || log.RecipientId == userId)));
+        var totalCount = await roomsQuery.CountAsync(cancellationToken);
+        var rooms = await roomsQuery
             .OrderByDescending(room => room.CreatedAtUtc)
-            .Take(limit)
+            .Skip((int)Math.Min(int.MaxValue, (long)(page - 1) * pageSize))
+            .Take(pageSize)
             .ToListAsync(cancellationToken);
 
         var roomNames = rooms
@@ -672,7 +724,7 @@ public sealed class CallLogService : ICallLogService
                 .OrderByDescending(log => log.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
 
-        return rooms
+        var items = rooms
             .Select(room =>
             {
                 var roomInvitations = invitations
@@ -712,25 +764,32 @@ public sealed class CallLogService : ICallLogService
                         .ToList());
             })
             .ToList();
+
+        return new PagedResult<CallRoomHistoryItem>(items, page, pageSize, totalCount);
     }
 
-    public async Task<IReadOnlyList<AdminCallRoomLogItem>> GetAdminRoomLogsAsync(
+    public async Task<PagedResult<AdminCallRoomLogItem>> GetAdminRoomLogsAsync(
         ClaimsPrincipal user,
-        int limit = 100,
+        int page = 1,
+        int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
         if (!user.IsInRole("Admin"))
         {
-            return Array.Empty<AdminCallRoomLogItem>();
+            return new PagedResult<AdminCallRoomLogItem>(Array.Empty<AdminCallRoomLogItem>(), 1, 20, 0);
         }
 
-        limit = Math.Clamp(limit, 1, 250);
-        var rooms = await _db.CallRoomLogs
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var roomsQuery = _db.CallRoomLogs
             .AsNoTracking()
             .Include(room => room.Participants)
-                .ThenInclude(session => session.User)
+                .ThenInclude(session => session.User);
+        var totalCount = await roomsQuery.CountAsync(cancellationToken);
+        var rooms = await roomsQuery
             .OrderByDescending(room => room.CreatedAtUtc)
-            .Take(limit)
+            .Skip((int)Math.Min(int.MaxValue, (long)(page - 1) * pageSize))
+            .Take(pageSize)
             .ToListAsync(cancellationToken);
 
         var roomNames = rooms
@@ -746,7 +805,7 @@ public sealed class CallLogService : ICallLogService
                 .OrderByDescending(log => log.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
 
-        return rooms
+        var items = rooms
             .Select(room => new AdminCallRoomLogItem(
                 room.Id,
                 room.RoomName,
@@ -770,6 +829,8 @@ public sealed class CallLogService : ICallLogService
                         log.DurationSeconds))
                     .ToList()))
             .ToList();
+
+                return new PagedResult<AdminCallRoomLogItem>(items, page, pageSize, totalCount);
     }
 
     private async Task<CallRoomLog> GetOrCreateRoomAsync(

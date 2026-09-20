@@ -14,14 +14,14 @@
             <h1>Room activity</h1>
             <p>Review who joined each room, when they left, and how invitations resolved.</p>
         </div>
-        <button type="button" class="btn-secondary" @onclick="LoadRoomsAsync" disabled="@isLoading">@(isLoading ? "Refreshing..." : "Refresh")</button>
+        <button type="button" class="btn-secondary" @onclick="() => LoadRoomsAsync()" disabled="@isLoading">@(isLoading ? "Refreshing..." : "Refresh")</button>
     </header>
 
-    @if (rooms is null)
+    @if (roomPage is null)
     {
         <div class="wc-empty-state">Loading room activity...</div>
     }
-    else if (rooms.Count == 0)
+    else if (roomPage!.Items.Count == 0)
     {
         <div class="wc-empty-state">
             <strong>No room activity yet</strong>
@@ -31,7 +31,7 @@
     else
     {
         <div class="room-log-list">
-            @foreach (var room in rooms)
+            @foreach (var room in roomPage.Items)
             {
                 <article class="room-log-item">
                     <header class="room-log-item-header">
@@ -118,12 +118,23 @@
                 </article>
             }
         </div>
+
+        @if (roomPage.TotalPages > 1)
+        {
+            <nav class="wc-pagination" aria-label="Room log pages">
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage - 1)" disabled="@(currentPage <= 1 || isLoading)">Previous</button>
+                <span>Page @roomPage.Page of @roomPage.TotalPages</span>
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage + 1)" disabled="@(currentPage >= roomPage.TotalPages || isLoading)">Next</button>
+            </nav>
+        }
     }
 </div>
 
 @code {
-    private IReadOnlyList<AdminCallRoomLogItem>? rooms;
+    private const int PageSize = 20;
+    private PagedResult<AdminCallRoomLogItem>? roomPage;
     private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
+    private int currentPage = 1;
     private bool isLoading;
 
     protected override async Task OnInitializedAsync()
@@ -138,12 +149,23 @@
         isLoading = true;
         try
         {
-            rooms = await CallLogs.GetAdminRoomLogsAsync(currentUser, 100);
+            roomPage = await CallLogs.GetAdminRoomLogsAsync(currentUser, currentPage, PageSize);
         }
         finally
         {
             isLoading = false;
         }
+    }
+
+    private async Task GoToPageAsync(int page)
+    {
+        if (roomPage is null || page < 1 || page > roomPage.TotalPages)
+        {
+            return;
+        }
+
+        currentPage = page;
+        await LoadRoomsAsync();
     }
 
     private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm:ss tt");

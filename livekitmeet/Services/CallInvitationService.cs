@@ -13,8 +13,15 @@ public sealed record CallInvitationResult(bool Success, string? Error, Guid? Inv
     public static CallInvitationResult Failed(string error) => new(false, error, null);
 }
 
+public sealed record CallInvitationAvailability(bool Available, string? Error);
+
 public interface ICallInvitationService
 {
+    Task<CallInvitationAvailability> CheckAvailabilityAsync(
+        ClaimsPrincipal caller,
+        string targetUserName,
+        CancellationToken cancellationToken = default);
+
     Task<CallInvitationResult> SendAsync(
         ClaimsPrincipal caller,
         string targetUserName,
@@ -63,6 +70,39 @@ public sealed class CallInvitationService : ICallInvitationService
         _actionTokenSecret = configuration["Auth:JwtSecret"] ?? throw new InvalidOperationException("Auth:JwtSecret must be configured.");
     }
 
+    public async Task<CallInvitationAvailability> CheckAvailabilityAsync(
+        ClaimsPrincipal caller,
+        string targetUserName,
+        CancellationToken cancellationToken = default)
+    {
+        var callerIdValue = caller.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(callerIdValue, out var callerId))
+        {
+            return new CallInvitationAvailability(false, "The caller could not be identified.");
+        }
+
+        targetUserName = targetUserName.Trim();
+        if (string.IsNullOrWhiteSpace(targetUserName))
+        {
+            return new CallInvitationAvailability(false, "Enter a username to call.");
+        }
+
+        var target = await _db.Users
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                user => user.NormalizedUserName == UserNameNormalizer.Normalize(targetUserName) && user.IsActive,
+                cancellationToken);
+        if (target is null)
+        {
+            return new CallInvitationAvailability(false, "That user does not exist.");
+        }
+        if (target.Id == callerId)
+        {
+            return new CallInvitationAvailability(false, "You cannot call yourself.");
+        }
+        return new CallInvitationAvailability(true, null);
+    }
+
     public async Task<CallInvitationResult> SendAsync(
         ClaimsPrincipal caller,
         string targetUserName,
@@ -91,7 +131,7 @@ public sealed class CallInvitationService : ICallInvitationService
                 cancellationToken);
         if (target is null)
         {
-            return CallInvitationResult.Failed("That user does not exist or is not active.");
+            return CallInvitationResult.Failed("That user does not exist.");
         }
         if (target.Id == callerId)
         {
@@ -122,6 +162,56 @@ public sealed class CallInvitationService : ICallInvitationService
             videoEnabled,
             DateTime.UtcNow.Add(CallInvitationPolicy.Lifetime));
 
+        var declineToken = CreateDeclineActionToken(invitation.InvitationId, target.Id, invitation.ExpiresAtUtc);
+        var declineUrl = CreateDeclineEndpoint(invitation.RoomUrl, invitation.InvitationId);
+        var pushData = new Dictionary<string, string>
+        {
+            ["type"] = "INCOMING_CALL",
+            ["callUUID"] = invitation.InvitationId.ToString(),
+            ["invitationId"] = invitation.InvitationId.ToString(),
+            ["roomName"] = roomName,
+            ["roomUrl"] = invitation.RoomUrl,
+            ["fromUserName"] = fromUserName,
+            ["fromDisplayName"] = fromDisplayName,
+            ["callerName"] = fromDisplayName,
+            ["callerHandle"] = fromUserName,
+            ["hasVideo"] = videoEnabled.ToString().ToLowerInvariant(),
+            ["audioEnabled"] = audioEnabled.ToString().ToLowerInvariant(),
+            ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant(),
+            ["declineToken"] = declineToken,
+            ["declineUrl"] = declineUrl
+        };
+
+        var deliveredToTray = _tracker.IsConnected(target.Id);
+        FcmSendResult? pushResult = null;
+        if (!deliveredToTray)
+        {
+            pushResult = await _pushNotifications.SendAsync(
+                target.Id,
+                $"Incoming call from {fromDisplayName}",
+                $"{roomName} is ready to join.",
+                pushData,
+                cancellationToken);
+
+            if (pushResult.DeliveredCount == 0)
+            {
+                if (pushResult.RegisteredCount == 0)
+                {
+                    return CallInvitationResult.Failed(
+                        "That user is not connected to the tray app and has no registered Android device. Make sure the APK is signed in with this exact username.");
+                }
+
+                if (!pushResult.Configured)
+                {
+                    return CallInvitationResult.Failed(
+                        pushResult.Error ?? "The Android device is registered, but Firebase server credentials are not configured.");
+                }
+
+                return CallInvitationResult.Failed(
+                    pushResult.Error ?? "The Android device is registered, but Firebase could not deliver the notification. Check the server logs.");
+            }
+        }
+
         await _callLogs.CreateAsync(
             invitation.InvitationId,
             callerId,
@@ -130,57 +220,18 @@ public sealed class CallInvitationService : ICallInvitationService
             invitation.RoomUrl,
             cancellationToken);
 
-        var declineToken = CreateDeclineActionToken(invitation.InvitationId, target.Id, invitation.ExpiresAtUtc);
-        var declineUrl = CreateDeclineEndpoint(invitation.RoomUrl, invitation.InvitationId);
-
-        var deliveredToTray = _tracker.IsConnected(target.Id);
         if (deliveredToTray)
         {
             await _hub.Clients
                 .Group(CallInvitationHub.UserGroup(target.Id))
                 .SendAsync("IncomingCall", invitation, cancellationToken);
-        }
 
-        var pushResult = await _pushNotifications.SendAsync(
-            target.Id,
-            $"Incoming call from {fromDisplayName}",
-            $"{roomName} is ready to join.",
-            new Dictionary<string, string>
-            {
-                ["type"] = "INCOMING_CALL",
-                ["callUUID"] = invitation.InvitationId.ToString(),
-                ["invitationId"] = invitation.InvitationId.ToString(),
-                ["roomName"] = roomName,
-                ["roomUrl"] = invitation.RoomUrl,
-                ["fromUserName"] = fromUserName,
-                ["fromDisplayName"] = fromDisplayName,
-                ["callerName"] = fromDisplayName,
-                ["callerHandle"] = fromUserName,
-                ["hasVideo"] = videoEnabled.ToString().ToLowerInvariant(),
-                ["audioEnabled"] = audioEnabled.ToString().ToLowerInvariant(),
-                ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant(),
-                ["declineToken"] = declineToken,
-                ["declineUrl"] = declineUrl
-            },
-            cancellationToken);
-
-        if (!deliveredToTray && pushResult.DeliveredCount == 0)
-        {
-            await _callLogs.MarkFailedAsync(invitation.InvitationId, cancellationToken);
-            if (pushResult.RegisteredCount == 0)
-            {
-                return CallInvitationResult.Failed(
-                    "That user is not connected to the tray app and has no registered Android device. Make sure the APK is signed in with this exact username.");
-            }
-
-            if (!pushResult.Configured)
-            {
-                return CallInvitationResult.Failed(
-                    pushResult.Error ?? "The Android device is registered, but Firebase server credentials are not configured.");
-            }
-
-            return CallInvitationResult.Failed(
-                pushResult.Error ?? "The Android device is registered, but Firebase could not deliver the notification. Check the server logs.");
+            await _pushNotifications.SendAsync(
+                target.Id,
+                $"Incoming call from {fromDisplayName}",
+                $"{roomName} is ready to join.",
+                pushData,
+                cancellationToken);
         }
 
         return new CallInvitationResult(true, null, invitation.InvitationId);

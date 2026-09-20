@@ -1669,6 +1669,34 @@ svg {
     gap: 1rem;
 }
 
+.wc-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1.25rem;
+    color: #5e7076;
+    font-size: 0.82rem;
+}
+
+.wc-pagination-button {
+    border: 1px solid #ccd7d3;
+    border-radius: 0.4rem;
+    padding: 0.5rem 0.8rem;
+    color: #1b2b31;
+    background: #fbfcfa;
+    cursor: pointer;
+}
+
+.wc-pagination-button:hover:not(:disabled) {
+    border-color: #1b2b31;
+}
+
+.wc-pagination-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
 .room-log-item {
     overflow: hidden;
     border: 1px solid #d9e0dd;

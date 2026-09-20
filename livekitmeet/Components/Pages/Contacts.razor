@@ -6,6 +6,7 @@
 @inject AppDbContext Db
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Navigation
+@inject ICallInvitationService CallInvitationService
 
 <PageTitle>wincall - Contacts</PageTitle>
 
@@ -29,6 +30,11 @@
             </button>
         }
     </div>
+
+    @if (!string.IsNullOrWhiteSpace(callStatusMessage))
+    {
+        <p class="wc-call-status" role="status">@callStatusMessage</p>
+    }
 
     @if (users is null)
     {
@@ -57,7 +63,7 @@
                     </div>
                     <div class="wc-contact-card-footer">
                         <span class="wc-online-dot">Available</span>
-                        <button type="button" class="wc-primary-icon-button" @onclick="() => CallContact(user.UserName)" aria-label="Call @user.DisplayName" title="Call @user.DisplayName">
+                        <button type="button" class="wc-primary-icon-button" @onclick="() => CallContactAsync(user.UserName)" disabled="@isStartingCall" aria-label="Call @user.DisplayName" title="Call @user.DisplayName">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
                             <span>Call</span>
                         </button>
@@ -70,8 +76,11 @@
 
 @code {
     private IReadOnlyList<AppUser>? users;
+    private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
     private Guid currentUserId;
     private string searchTerm = string.Empty;
+    private string callStatusMessage = string.Empty;
+    private bool isStartingCall;
 
     private IEnumerable<AppUser> filteredUsers => (users ?? Array.Empty<AppUser>())
         .Where(user => string.IsNullOrWhiteSpace(searchTerm) ||
@@ -81,6 +90,7 @@
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = authState.User;
         Guid.TryParse(authState.User.FindFirstValue(ClaimTypes.NameIdentifier), out currentUserId);
         users = await Db.Users
             .AsNoTracking()
@@ -89,8 +99,29 @@
             .ToListAsync();
     }
 
-    private void CallContact(string username)
+    private async Task CallContactAsync(string username)
     {
+        if (isStartingCall)
+        {
+            return;
+        }
+
+        isStartingCall = true;
+        callStatusMessage = string.Empty;
+        try
+        {
+            var availability = await CallInvitationService.CheckAvailabilityAsync(currentUser, username);
+            if (!availability.Available)
+            {
+                callStatusMessage = availability.Error ?? "That user is not currently available.";
+                return;
+            }
+        }
+        finally
+        {
+            isStartingCall = false;
+        }
+
         var roomName = $"call-{Guid.NewGuid():N}"[..15];
         Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false&invite={Uri.EscapeDataString(username)}");
     }

@@ -20,14 +20,14 @@
 
     <div class="wc-search-bar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
-        <input class="wc-input" @bind="searchTerm" @bind:event="oninput" placeholder="Search call history..." autocomplete="off" />
+        <input class="wc-input" value="@searchTerm" @oninput="HandleSearchInput" placeholder="Search call history..." autocomplete="off" />
     </div>
 
-    @if (calls is null)
+    @if (callPage is null)
     {
         <div class="wc-empty-state">Loading call history...</div>
     }
-    else if (!filteredCalls.Any())
+    else if (callPage.Items.Count == 0)
     {
         <div class="wc-empty-state">
             <span class="wc-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg></span>
@@ -38,7 +38,7 @@
     else
     {
         <section class="wc-history-list" aria-label="Call history">
-            @foreach (var call in filteredCalls)
+            @foreach (var call in callPage.Items)
             {
                 <div class="wc-history-row wc-room-history-row">
                     <div class="wc-call-person">
@@ -62,24 +62,62 @@
                 </div>
             }
         </section>
+
+        @if (callPage.TotalPages > 1)
+        {
+            <nav class="wc-pagination" aria-label="Call history pages">
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage - 1)" disabled="@(currentPage <= 1 || isLoading)">Previous</button>
+                <span>Page @callPage.Page of @callPage.TotalPages</span>
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage + 1)" disabled="@(currentPage >= callPage.TotalPages || isLoading)">Next</button>
+            </nav>
+        }
     }
 </div>
 
 @code {
-    private IReadOnlyList<CallLogItem>? calls;
+    private const int PageSize = 20;
+    private PagedResult<CallLogItem>? callPage;
+    private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
     private string searchTerm = string.Empty;
-
-    private IEnumerable<CallLogItem> filteredCalls => (calls ?? Array.Empty<CallLogItem>())
-        .Where(call => string.IsNullOrWhiteSpace(searchTerm) ||
-                      call.RoomName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                      call.ContactDisplayName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                      call.ContactUserName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                      GetCallStatus(call).Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase));
+    private int currentPage = 1;
+    private bool isLoading;
 
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
-        calls = await CallLogs.GetRecentAsync(authState.User, 100);
+        currentUser = authState.User;
+        await LoadCallsAsync();
+    }
+
+    private async Task HandleSearchInput(ChangeEventArgs args)
+    {
+        searchTerm = args.Value?.ToString() ?? string.Empty;
+        currentPage = 1;
+        await LoadCallsAsync();
+    }
+
+    private async Task GoToPageAsync(int page)
+    {
+        if (callPage is null || page < 1 || page > callPage.TotalPages)
+        {
+            return;
+        }
+
+        currentPage = page;
+        await LoadCallsAsync();
+    }
+
+    private async Task LoadCallsAsync()
+    {
+        isLoading = true;
+        try
+        {
+            callPage = await CallLogs.GetRecentAsync(currentUser, currentPage, PageSize, searchTerm);
+        }
+        finally
+        {
+            isLoading = false;
+        }
     }
 
     private void OpenRoom(string roomName)
