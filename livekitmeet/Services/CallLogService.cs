@@ -594,7 +594,7 @@ public sealed class CallLogService : ICallLogService
 
         return invitation.Status switch
         {
-            CallLogStatuses.Declined when invitation.CallerId == userId => "Cancelled",
+            CallLogStatuses.Declined => "Declined",
             CallLogStatuses.Answered or CallLogStatuses.Ended => "Not connected",
             CallLogStatuses.Failed => "Not connected",
             CallLogStatuses.Ringing => "Calling",

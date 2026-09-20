@@ -1138,6 +1138,32 @@ svg {
     background: #fff8f8;
 }
 
+.pending-invitation-item {
+    gap: 0.75rem;
+}
+
+.participant-cancel-button {
+    flex: 0 0 auto;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid #f12d36;
+    border-radius: 6px;
+    color: #d91f2a;
+    background: #ffffff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.participant-cancel-button:hover:not(:disabled) {
+    color: #ffffff;
+    background: #f12d36;
+}
+
+.participant-cancel-button:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
 .participant-info {
     display: flex;
     align-items: center;

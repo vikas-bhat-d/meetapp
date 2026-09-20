@@ -28,7 +28,7 @@ const INCOMING_CALL_CATEGORY = 'INCOMING_CALL';
 const INCOMING_CALL_CHANNEL = 'incoming-calls-v2';
 
 type IncomingCallNativeModule = {
-  showIncomingCall: (callerName: string, roomName: string, roomUrl: string, invitationId: string) => void;
+  showIncomingCall: (callerName: string, roomName: string, roomUrl: string, invitationId: string, declineToken: string) => void;
   dismissIncomingCall: (invitationId: string) => void;
 };
 
@@ -39,6 +39,7 @@ type PushData = {
   roomName?: string;
   invitationId?: string;
   callUUID?: string;
+  declineToken?: string;
   fromDisplayName?: string;
   fromUserName?: string;
   callerDisplayName?: string;
@@ -118,7 +119,13 @@ TaskManager.defineTask<Notifications.NotificationTaskPayload>(BACKGROUND_NOTIFIC
 
   if (incomingCallNativeModule?.showIncomingCall) {
     try {
-      await incomingCallNativeModule.showIncomingCall(callerName, roomName, roomUrl, notificationId);
+      await incomingCallNativeModule.showIncomingCall(
+        callerName,
+        roomName,
+        roomUrl,
+        notificationId,
+        (payload.declineToken as string | undefined) ?? ''
+      );
       return;
     } catch {
       // Fall back to an Expo notification when running without the native module.
@@ -837,7 +844,7 @@ export default function App() {
   if (!configurationReady) {
     return (
       <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
-        <ActivityIndicator size="large" color="#6f8cff" />
+        <ActivityIndicator size="large" color="#f12d36" />
         <Text style={styles.errorText}>Loading app settings...</Text>
       </SafeAreaView>
     );
@@ -879,7 +886,7 @@ export default function App() {
         <View style={styles.webViewContainer}>
           {isLoading && (
             <View style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color="#6f8cff" />
+              <ActivityIndicator size="large" color="#f12d36" />
             </View>
           )}
           <WebView
@@ -947,11 +954,11 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#10182a'
+    backgroundColor: '#f7f8fa'
   },
   container: {
     flex: 1,
-    backgroundColor: '#10182a'
+    backgroundColor: '#f7f8fa'
   },
   incomingCallOverlay: {
     position: 'absolute',
@@ -963,14 +970,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
     padding: 18,
-    backgroundColor: 'rgba(5, 10, 22, 0.78)'
+    backgroundColor: 'rgba(32, 37, 43, 0.32)'
   },
   incomingCallCard: {
     width: '100%',
     maxWidth: 420,
     padding: 22,
     borderRadius: 16,
-    backgroundColor: '#1c2940',
+    backgroundColor: '#ffffff',
     shadowColor: '#000000',
     shadowOpacity: 0.3,
     shadowRadius: 12,
@@ -978,25 +985,25 @@ const styles = StyleSheet.create({
   },
   incomingCallEyebrow: {
     marginBottom: 8,
-    color: '#83a5ff',
+    color: '#d91f2a',
     fontSize: 13,
     fontWeight: '700',
     textTransform: 'uppercase'
   },
   incomingCallTitle: {
-    color: '#ffffff',
+    color: '#20252b',
     fontSize: 24,
     fontWeight: '700'
   },
   incomingCallRoom: {
     marginTop: 4,
-    color: '#d7def0',
+    color: '#747b84',
     fontSize: 15,
     fontWeight: '600'
   },
   incomingCallBody: {
     marginTop: 12,
-    color: '#aab6cf',
+    color: '#747b84',
     fontSize: 13,
     lineHeight: 18
   },
@@ -1014,10 +1021,10 @@ const styles = StyleSheet.create({
     borderRadius: 8
   },
   declineCallButton: {
-    backgroundColor: '#8f3f35'
+    backgroundColor: '#f12d36'
   },
   answerCallButton: {
-    backgroundColor: '#2e8b57'
+    backgroundColor: '#2f9a69'
   },
   callActionText: {
     color: '#ffffff',
@@ -1040,7 +1047,7 @@ const styles = StyleSheet.create({
     left: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#10182a'
+    backgroundColor: '#f7f8fa'
   },
   microphoneWarning: {
     position: 'absolute',
@@ -1051,7 +1058,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 10,
     borderRadius: 6,
-    backgroundColor: '#8f3f35'
+    backgroundColor: '#f12d36'
   },
   microphoneWarningText: {
     color: '#ffffff',
@@ -1063,18 +1070,18 @@ const styles = StyleSheet.create({
     padding: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#10182a'
+    backgroundColor: '#f7f8fa'
   },
   errorTitle: {
     marginBottom: 12,
-    color: '#ffffff',
+    color: '#20252b',
     fontSize: 20,
     fontWeight: '700',
     textAlign: 'center'
   },
   errorText: {
     marginTop: 6,
-    color: '#b7c0d8',
+    color: '#747b84',
     textAlign: 'center'
   }
 });

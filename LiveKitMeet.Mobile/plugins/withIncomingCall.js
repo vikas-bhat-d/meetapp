@@ -18,9 +18,9 @@ class IncomingCallModule(reactContext: ReactApplicationContext) : ReactContextBa
   override fun getName(): String = "IncomingCall"
 
   @ReactMethod
-  fun showIncomingCall(callerName: String, roomName: String, roomUrl: String, invitationId: String) {
+  fun showIncomingCall(callerName: String, roomName: String, roomUrl: String, invitationId: String, declineToken: String) {
     Handler(Looper.getMainLooper()).post {
-      IncomingCallNotification.show(reactApplicationContext, callerName, roomName, roomUrl, invitationId)
+      IncomingCallNotification.show(reactApplicationContext, callerName, roomName, roomUrl, invitationId, declineToken)
     }
   }
 
@@ -47,6 +47,52 @@ class IncomingCallPackage : ReactPackage {
     emptyList()
 }
 `,
+    'IncomingCallActionService.kt': `${packageDeclaration}
+
+import android.app.IntentService
+import android.content.Intent
+import android.net.Uri
+import java.net.HttpURLConnection
+import java.net.URL
+
+class IncomingCallActionService : IntentService("IncomingCallActionService") {
+  override fun onHandleIntent(intent: Intent?) {
+    if (intent?.action != IncomingCallNotification.ACTION_DECLINE) {
+      return
+    }
+
+    val roomUrl = intent.getStringExtra(IncomingCallNotification.EXTRA_ROOM_URL) ?: return
+    val invitationId = intent.getStringExtra(IncomingCallNotification.EXTRA_INVITATION_ID) ?: return
+    val declineToken = intent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN) ?: return
+    if (declineToken.isBlank()) {
+      return
+    }
+
+    try {
+      val roomUri = Uri.parse(roomUrl)
+      val endpoint = Uri.Builder()
+        .scheme(roomUri.scheme)
+        .authority(roomUri.authority)
+        .appendPath("api")
+        .appendPath("call-invitations")
+        .appendPath(invitationId)
+        .appendPath("decline-native")
+        .appendQueryParameter("token", declineToken)
+        .build()
+      val connection = URL(endpoint.toString()).openConnection() as HttpURLConnection
+      connection.requestMethod = "POST"
+      connection.connectTimeout = 5000
+      connection.readTimeout = 5000
+      connection.doOutput = true
+      connection.outputStream.use { }
+      connection.responseCode
+      connection.disconnect()
+    } catch (_: Exception) {
+      // The notification is already dismissed; a later cancellation can still resolve the log.
+    }
+  }
+}
+`,
     'IncomingCallFirebaseService.kt': `${packageDeclaration}
 
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -65,7 +111,8 @@ class IncomingCallFirebaseService : FirebaseMessagingService() {
           payload["callerName"] ?: payload["fromDisplayName"] ?: "Someone",
           payload["roomName"] ?: "LiveKit meeting",
           roomUrl,
-          invitationId
+          invitationId,
+          payload["declineToken"] ?: ""
         )
       }
       "CANCEL_CALL" -> {
@@ -95,25 +142,26 @@ object IncomingCallNotification {
   const val EXTRA_ROOM_NAME = "roomName"
   const val EXTRA_ROOM_URL = "roomUrl"
   const val EXTRA_INVITATION_ID = "invitationId"
+  const val EXTRA_DECLINE_TOKEN = "declineToken"
   const val EXTRA_NOTIFICATION_ID = "notificationId"
 
   private const val CHANNEL_ID = "incoming-calls-fullscreen-v1"
 
-  fun show(context: Context, callerName: String, roomName: String, roomUrl: String, invitationId: String) {
+  fun show(context: Context, callerName: String, roomName: String, roomUrl: String, invitationId: String, declineToken: String) {
     val notificationId = invitationId.hashCode()
     ensureChannel(context)
 
-    val fullScreenIntent = callIntent(context, callerName, roomName, invitationId, roomUrl, null)
+    val fullScreenIntent = callIntent(context, callerName, roomName, invitationId, roomUrl, null, declineToken)
     val fullScreenPendingIntent = pendingActivity(context, notificationId, fullScreenIntent)
     val acceptPendingIntent = pendingActivity(
       context,
       notificationId + 1,
-      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_ACCEPT)
+      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_ACCEPT, declineToken)
     )
     val declinePendingIntent = pendingActivity(
       context,
       notificationId + 2,
-      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_DECLINE)
+      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_DECLINE, declineToken)
     )
 
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -126,7 +174,7 @@ object IncomingCallNotification {
       .setOngoing(true)
       .setAutoCancel(false)
       .setOnlyAlertOnce(false)
-      .setColor(Color.rgb(46, 107, 234))
+      .setColor(Color.rgb(241, 45, 54))
       .setVibrate(longArrayOf(0, 800, 600, 800))
       .setFullScreenIntent(fullScreenPendingIntent, true)
       .setContentIntent(fullScreenPendingIntent)
@@ -167,13 +215,14 @@ object IncomingCallNotification {
     manager.createNotificationChannel(channel)
   }
 
-  private fun callIntent(context: Context, callerName: String, roomName: String, invitationId: String, roomUrl: String, action: String?): Intent =
+  private fun callIntent(context: Context, callerName: String, roomName: String, invitationId: String, roomUrl: String, action: String?, declineToken: String): Intent =
     Intent(context, IncomingCallActivity::class.java).apply {
       if (action != null) this.action = action
       putExtra(EXTRA_CALLER_NAME, callerName)
       putExtra(EXTRA_ROOM_NAME, roomName)
       putExtra(EXTRA_ROOM_URL, roomUrl)
       putExtra(EXTRA_INVITATION_ID, invitationId)
+      putExtra(EXTRA_DECLINE_TOKEN, declineToken)
       putExtra(EXTRA_NOTIFICATION_ID, invitationId.hashCode())
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
@@ -205,6 +254,7 @@ import android.widget.TextView
 class IncomingCallActivity : Activity() {
   private var invitationId: String = ""
   private var roomUrl: String = ""
+  private var declineToken: String = ""
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -232,13 +282,14 @@ class IncomingCallActivity : Activity() {
       window.addFlags(WindowManagerFlags.SHOW_WHEN_LOCKED or WindowManagerFlags.TURN_SCREEN_ON)
     }
     window.addFlags(WindowManagerFlags.KEEP_SCREEN_ON)
-    window.statusBarColor = Color.rgb(16, 24, 42)
-    window.navigationBarColor = Color.rgb(16, 24, 42)
+    window.statusBarColor = Color.rgb(247, 248, 250)
+    window.navigationBarColor = Color.rgb(247, 248, 250)
   }
 
   private fun handleIntent(incomingIntent: Intent) {
     invitationId = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_INVITATION_ID) ?: ""
     roomUrl = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_ROOM_URL) ?: ""
+    declineToken = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN) ?: ""
     when (incomingIntent.action) {
       IncomingCallNotification.ACTION_ACCEPT -> acceptCall()
       IncomingCallNotification.ACTION_DECLINE -> declineCall()
@@ -254,12 +305,12 @@ class IncomingCallActivity : Activity() {
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER
       setPadding(32, 48, 32, 48)
-      setBackgroundColor(Color.rgb(16, 24, 42))
+      setBackgroundColor(Color.rgb(247, 248, 250))
     }
 
-    val eyebrow = textView("INCOMING CALL", 14, Color.rgb(131, 165, 255), Typeface.BOLD)
-    val caller = textView(callerName, 30, Color.WHITE, Typeface.BOLD)
-    val room = textView(roomName, 16, Color.rgb(215, 222, 240), Typeface.NORMAL)
+    val eyebrow = textView("INCOMING CALL", 14, Color.rgb(217, 31, 42), Typeface.BOLD)
+    val caller = textView(callerName, 30, Color.rgb(32, 37, 43), Typeface.BOLD)
+    val room = textView(roomName, 16, Color.rgb(116, 123, 132), Typeface.NORMAL)
     root.addView(eyebrow, centeredParams(0, 12))
     root.addView(caller, centeredParams(0, 8))
     root.addView(room, centeredParams(0, 36))
@@ -272,14 +323,14 @@ class IncomingCallActivity : Activity() {
       text = "Decline"
       isAllCaps = false
       setTextColor(Color.WHITE)
-      setBackgroundColor(Color.rgb(143, 63, 53))
+      setBackgroundColor(Color.rgb(241, 45, 54))
       setOnClickListener { declineCall() }
     }
     val accept = Button(this).apply {
       text = "Accept"
       isAllCaps = false
       setTextColor(Color.WHITE)
-      setBackgroundColor(Color.rgb(46, 139, 87))
+      setBackgroundColor(Color.rgb(47, 154, 105))
       setOnClickListener { acceptCall() }
     }
     actions.addView(decline, buttonParams())
@@ -305,18 +356,13 @@ class IncomingCallActivity : Activity() {
 
   private fun declineCall() {
     IncomingCallNotification.dismiss(this, invitationId)
-    val deepLink = Uri.Builder()
-      .scheme("livekitmeet")
-      .authority("incoming")
-      .appendQueryParameter("action", "decline")
-      .appendQueryParameter("invitationId", invitationId)
-      .build()
-    startActivity(Intent(this, MainActivity::class.java).apply {
-      action = Intent.ACTION_VIEW
-      data = deepLink
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    startService(Intent(this, IncomingCallActionService::class.java).apply {
+      action = IncomingCallNotification.ACTION_DECLINE
+      putExtra(IncomingCallNotification.EXTRA_ROOM_URL, roomUrl)
+      putExtra(IncomingCallNotification.EXTRA_INVITATION_ID, invitationId)
+      putExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN, declineToken)
     })
-    finish()
+    finishAndRemoveTask()
   }
 
   private fun textView(value: String, size: Int, color: Int, style: Int) = TextView(this).apply {
@@ -401,6 +447,19 @@ module.exports = function withIncomingCall(config) {
               action: [{ $: { 'android:name': 'com.google.firebase.MESSAGING_EVENT' } }],
             },
           ],
+        });
+      }
+
+      const actionServiceExists = application.service.some(
+        service => service.$?.['android:name'] === '.IncomingCallActionService'
+      );
+      if (!actionServiceExists) {
+        application.service.push({
+          $: {
+            'android:name': '.IncomingCallActionService',
+            'android:exported': 'false',
+            'android:stopWithTask': 'false',
+          },
         });
       }
     }

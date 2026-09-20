@@ -398,6 +398,19 @@ app.MapPost("/api/call-invitations/{invitationId:guid}/decline", async (
     return declined ? Results.NoContent() : Results.NotFound();
 }).RequireAuthorization();
 
+app.MapPost("/api/call-invitations/{invitationId:guid}/decline-native", async (
+    Guid invitationId,
+    HttpContext context,
+    ICallInvitationService invitations) =>
+{
+    var actionToken = context.Request.Query["token"].ToString();
+    var declined = await invitations.DeclineWithActionTokenAsync(
+        invitationId,
+        actionToken,
+        context.RequestAborted);
+    return declined ? Results.NoContent() : Results.NotFound();
+}).AllowAnonymous();
+
 app.MapPost("/api/call-invitations/{invitationId:guid}/end", async (
     Guid invitationId,
     HttpContext context,

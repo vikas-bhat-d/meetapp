@@ -155,6 +155,28 @@ else
                         }
                     </section>
 
+                    @if (pendingInvitations.Count > 0)
+                    {
+                        <div class="drawer-section-label">Pending invitations</div>
+                        @foreach (var invitation in pendingInvitations)
+                        {
+                            <div class="participant-item pending-invitation-item">
+                                <div class="participant-info">
+                                    <div class="participant-avatar-small">
+                                        @(string.IsNullOrWhiteSpace(invitation.UserName) ? "?" : invitation.UserName.Trim().Substring(0, 1).ToUpper())
+                                    </div>
+                                    <div>
+                                        <span class="participant-name">@invitation.UserName</span>
+                                        <span class="participant-badge-you">Ringing</span>
+                                    </div>
+                                </div>
+                                <button type="button" class="participant-cancel-button" @onclick="() => CancelInvitationAsync(invitation)" disabled="@invitation.IsCancelling">
+                                    @(invitation.IsCancelling ? "Stopping..." : "Cancel")
+                                </button>
+                            </div>
+                        }
+                    }
+
                     <div class="drawer-section-label">In this room</div>
                     @foreach (var p in participants)
                     {
@@ -353,7 +375,7 @@ else
 
             if (result.Success && result.InvitationId is Guid sentInvitationId)
             {
-                invitationIds.Add(sentInvitationId);
+                TrackOutgoingInvitation(sentInvitationId, invitee);
             }
 
             results.Add(result.Success
@@ -500,7 +522,7 @@ else
 
             if (result.Success && result.InvitationId is Guid sentInvitationId)
             {
-                invitationIds.Add(sentInvitationId);
+                TrackOutgoingInvitation(sentInvitationId, invitee);
             }
 
             ringStatusMessage = result.Success
@@ -534,6 +556,50 @@ else
         "Connecting..." => "status-connecting",
         _ => "status-disconnected"
     };
+
+    private void TrackOutgoingInvitation(Guid invitationId, string userName)
+    {
+        invitationIds.Add(invitationId);
+        if (pendingInvitations.All(invitation => invitation.InvitationId != invitationId))
+        {
+            pendingInvitations.Add(new PendingInvitation(invitationId, userName));
+        }
+    }
+
+    private async Task CancelInvitationAsync(PendingInvitation invitation)
+    {
+        if (invitation.IsCancelling)
+        {
+            return;
+        }
+
+        invitation.IsCancelling = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            var cancelled = await CallInvitationService.CancelAsync(authState.User, invitation.InvitationId);
+            if (cancelled)
+            {
+                invitationIds.Remove(invitation.InvitationId);
+                pendingInvitations.Remove(invitation);
+                ringStatusMessage = $"Invitation to '{invitation.UserName}' cancelled.";
+            }
+            else
+            {
+                invitation.IsCancelling = false;
+                ringStatusMessage = "That invitation is no longer ringing.";
+            }
+        }
+        catch (Exception ex)
+        {
+            invitation.IsCancelling = false;
+            ringStatusMessage = ex.Message;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
 
     [JSInvokable]
     public async Task OnRoomConnected(string roomName, string identity)
@@ -615,6 +681,7 @@ else
     private bool participantLeaveRequested;
     private Task? participantFinalizationTask;
     private bool callLogsFinalized;
+    private readonly List<PendingInvitation> pendingInvitations = new();
 
     private async Task StartParticipantSessionAsync(string roomName)
     {
@@ -704,5 +771,18 @@ else
     {
         public bool Success { get; set; }
         public string? Error { get; set; }
+    }
+
+    private sealed class PendingInvitation
+    {
+        public PendingInvitation(Guid invitationId, string userName)
+        {
+            InvitationId = invitationId;
+            UserName = userName;
+        }
+
+        public Guid InvitationId { get; }
+        public string UserName { get; }
+        public bool IsCancelling { get; set; }
     }
 }

@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using livekitmeet.Data;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.WebUtilities;
@@ -26,6 +28,11 @@ public interface ICallInvitationService
         ClaimsPrincipal caller,
         Guid invitationId,
         CancellationToken cancellationToken = default);
+
+    Task<bool> DeclineWithActionTokenAsync(
+        Guid invitationId,
+        string actionToken,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CallInvitationService : ICallInvitationService
@@ -35,19 +42,22 @@ public sealed class CallInvitationService : ICallInvitationService
     private readonly CallInvitationConnectionTracker _tracker;
     private readonly IFirebasePushNotificationService _pushNotifications;
     private readonly ICallLogService _callLogs;
+    private readonly string _actionTokenSecret;
 
     public CallInvitationService(
         AppDbContext db,
         IHubContext<CallInvitationHub> hub,
         CallInvitationConnectionTracker tracker,
         IFirebasePushNotificationService pushNotifications,
-        ICallLogService callLogs)
+        ICallLogService callLogs,
+        IConfiguration configuration)
     {
         _db = db;
         _hub = hub;
         _tracker = tracker;
         _pushNotifications = pushNotifications;
         _callLogs = callLogs;
+        _actionTokenSecret = configuration["Auth:JwtSecret"] ?? throw new InvalidOperationException("Auth:JwtSecret must be configured.");
     }
 
     public async Task<CallInvitationResult> SendAsync(
@@ -117,6 +127,8 @@ public sealed class CallInvitationService : ICallInvitationService
             invitation.RoomUrl,
             cancellationToken);
 
+        var declineToken = CreateDeclineActionToken(invitation.InvitationId, target.Id, invitation.ExpiresAtUtc);
+
         var deliveredToTray = _tracker.IsConnected(target.Id);
         if (deliveredToTray)
         {
@@ -142,7 +154,8 @@ public sealed class CallInvitationService : ICallInvitationService
                 ["callerHandle"] = fromUserName,
                 ["hasVideo"] = videoEnabled.ToString().ToLowerInvariant(),
                 ["audioEnabled"] = audioEnabled.ToString().ToLowerInvariant(),
-                ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant()
+                ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant(),
+                ["declineToken"] = declineToken
             },
             cancellationToken);
 
@@ -197,5 +210,82 @@ public sealed class CallInvitationService : ICallInvitationService
 
         await _pushNotifications.SendCancelAsync(log.RecipientId, invitationId, cancellationToken);
         return true;
+    }
+
+    public async Task<bool> DeclineWithActionTokenAsync(
+        Guid invitationId,
+        string actionToken,
+        CancellationToken cancellationToken = default)
+    {
+        var log = await _db.CallLogs.SingleOrDefaultAsync(
+            candidate => candidate.InvitationId == invitationId,
+            cancellationToken);
+        if (log is null || log.Status != CallLogStatuses.Ringing ||
+            !ValidateDeclineActionToken(actionToken, invitationId, log.RecipientId))
+        {
+            return false;
+        }
+
+        log.Status = CallLogStatuses.Declined;
+        log.EndedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(log.CallerId))
+            .SendAsync("CallDeclined", invitationId, cancellationToken);
+        return true;
+    }
+
+    private string CreateDeclineActionToken(Guid invitationId, Guid recipientId, DateTime expiresAtUtc)
+    {
+        var payload = string.Join(
+            '|',
+            invitationId.ToString("N"),
+            recipientId.ToString("N"),
+            new DateTimeOffset(expiresAtUtc).ToUnixTimeSeconds());
+        var encodedPayload = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(payload));
+        var signature = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(_actionTokenSecret),
+            Encoding.UTF8.GetBytes(encodedPayload));
+        return $"{encodedPayload}.{WebEncoders.Base64UrlEncode(signature)}";
+    }
+
+    private bool ValidateDeclineActionToken(string actionToken, Guid invitationId, Guid recipientId)
+    {
+        if (string.IsNullOrWhiteSpace(actionToken))
+        {
+            return false;
+        }
+
+        var tokenParts = actionToken.Split('.', 2, StringSplitOptions.None);
+        if (tokenParts.Length != 2)
+        {
+            return false;
+        }
+
+        try
+        {
+            var payloadBytes = WebEncoders.Base64UrlDecode(tokenParts[0]);
+            var payloadParts = Encoding.UTF8.GetString(payloadBytes).Split('|');
+            if (payloadParts.Length != 3 ||
+                !Guid.TryParseExact(payloadParts[0], "N", out var tokenInvitationId) ||
+                !Guid.TryParseExact(payloadParts[1], "N", out var tokenRecipientId) ||
+                !long.TryParse(payloadParts[2], out var expiresAtUnix))
+            {
+                return false;
+            }
+
+            var expectedSignature = HMACSHA256.HashData(
+                Encoding.UTF8.GetBytes(_actionTokenSecret),
+                Encoding.UTF8.GetBytes(tokenParts[0]));
+            var providedSignature = WebEncoders.Base64UrlDecode(tokenParts[1]);
+            return tokenInvitationId == invitationId &&
+                   tokenRecipientId == recipientId &&
+                   expiresAtUnix >= DateTimeOffset.UtcNow.ToUnixTimeSeconds() &&
+                   CryptographicOperations.FixedTimeEquals(expectedSignature, providedSignature);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 }
