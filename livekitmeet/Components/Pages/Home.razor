@@ -141,7 +141,7 @@
         }
 
         var roomName = $"call-{Guid.NewGuid():N}"[..15];
-        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true&invite={Uri.EscapeDataString(username.Trim())}");
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false&invite={Uri.EscapeDataString(username.Trim())}");
     }
 
     private static string GetInitials(string value)
@@ -157,7 +157,7 @@
 
     private void OpenRoom(string roomName)
     {
-        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true");
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false");
     }
 
     private static string GetRoomStatus(CallRoomHistoryItem room) => room.Status;

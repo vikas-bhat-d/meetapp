@@ -87,7 +87,7 @@
 
     private void OpenRoom(string roomName)
     {
-        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true");
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false");
     }
 
     private static string GetRoomStatus(CallRoomHistoryItem room) => room.Status;

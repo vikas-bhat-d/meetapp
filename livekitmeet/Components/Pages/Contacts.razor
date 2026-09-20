@@ -92,7 +92,7 @@
     private void CallContact(string username)
     {
         var roomName = $"call-{Guid.NewGuid():N}"[..15];
-        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=true&invite={Uri.EscapeDataString(username)}");
+        Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false&invite={Uri.EscapeDataString(username)}");
     }
 
     private static string GetInitials(string value)
