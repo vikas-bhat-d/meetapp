@@ -17,15 +17,15 @@
             <h1>Contacts</h1>
             <p>Find someone from your workspace and start a call.</p>
         </div>
-        <span class="wc-page-count">@filteredUsers.Count() people</span>
+        <span class="wc-page-count">@(contactsPage?.TotalCount ?? 0) people</span>
     </header>
 
     <div class="wc-search-bar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
-        <input class="wc-input" @bind="searchTerm" @bind:event="oninput" placeholder="Search users..." autocomplete="off" />
+        <input class="wc-input" value="@searchTerm" @oninput="HandleSearchInput" placeholder="Search users..." autocomplete="off" />
         @if (!string.IsNullOrWhiteSpace(searchTerm))
         {
-            <button type="button" class="wc-clear-button" @onclick="() => searchTerm = string.Empty" aria-label="Clear search" title="Clear search">
+            <button type="button" class="wc-clear-button" @onclick="ClearSearchAsync" aria-label="Clear search" title="Clear search">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
             </button>
         }
@@ -36,11 +36,11 @@
         <p class="wc-call-status" role="status">@callStatusMessage</p>
     }
 
-    @if (users is null)
+    @if (contactsPage is null)
     {
         <div class="wc-empty-state">Loading contacts...</div>
     }
-    else if (!filteredUsers.Any())
+    else if (contactsPage.Items.Count == 0)
     {
         <div class="wc-empty-state">
             <span class="wc-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg></span>
@@ -51,7 +51,7 @@
     else
     {
         <div class="wc-contact-grid">
-            @foreach (var user in filteredUsers)
+            @foreach (var user in contactsPage.Items)
             {
                 <article class="wc-contact-card">
                     <div class="wc-contact-card-person">
@@ -71,32 +71,93 @@
                 </article>
             }
         </div>
+
+        @if (contactsPage.TotalPages > 1)
+        {
+            <nav class="wc-pagination" aria-label="Contact pages">
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage - 1)" disabled="@(currentPage <= 1 || isLoading)">Previous</button>
+                <span>Page @contactsPage.Page of @contactsPage.TotalPages</span>
+                <button type="button" class="wc-pagination-button" @onclick="() => GoToPageAsync(currentPage + 1)" disabled="@(currentPage >= contactsPage.TotalPages || isLoading)">Next</button>
+            </nav>
+        }
     }
 </div>
 
 @code {
-    private IReadOnlyList<AppUser>? users;
+    private const int PageSize = 20;
+    private PagedResult<AppUser>? contactsPage;
     private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
     private Guid currentUserId;
     private string searchTerm = string.Empty;
     private string callStatusMessage = string.Empty;
     private bool isStartingCall;
-
-    private IEnumerable<AppUser> filteredUsers => (users ?? Array.Empty<AppUser>())
-        .Where(user => string.IsNullOrWhiteSpace(searchTerm) ||
-                      user.DisplayName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                      user.UserName.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase));
+    private int currentPage = 1;
+    private bool isLoading;
 
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
         currentUser = authState.User;
         Guid.TryParse(authState.User.FindFirstValue(ClaimTypes.NameIdentifier), out currentUserId);
-        users = await Db.Users
-            .AsNoTracking()
-            .Where(user => user.IsActive && user.Id != currentUserId)
-            .OrderBy(user => user.DisplayName)
-            .ToListAsync();
+        await LoadContactsAsync();
+    }
+
+    private async Task HandleSearchInput(ChangeEventArgs args)
+    {
+        searchTerm = args.Value?.ToString() ?? string.Empty;
+        currentPage = 1;
+        await LoadContactsAsync();
+    }
+
+    private async Task ClearSearchAsync()
+    {
+        searchTerm = string.Empty;
+        currentPage = 1;
+        await LoadContactsAsync();
+    }
+
+    private async Task GoToPageAsync(int page)
+    {
+        if (contactsPage is null || page < 1 || page > contactsPage.TotalPages)
+        {
+            return;
+        }
+
+        currentPage = page;
+        await LoadContactsAsync();
+    }
+
+    private async Task LoadContactsAsync()
+    {
+        isLoading = true;
+        try
+        {
+            var query = Db.Users
+                .AsNoTracking()
+                .Where(user => user.IsActive && user.Id != currentUserId);
+
+            var trimmedSearchTerm = searchTerm.Trim();
+            if (trimmedSearchTerm.Length > 0)
+            {
+                query = query.Where(user => user.DisplayName.Contains(trimmedSearchTerm) || user.UserName.Contains(trimmedSearchTerm));
+            }
+
+            var totalCount = await query.CountAsync();
+            var totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)PageSize));
+            currentPage = Math.Min(currentPage, totalPages);
+
+            var items = await query
+                .OrderBy(user => user.DisplayName)
+                .Skip((currentPage - 1) * PageSize)
+                .Take(PageSize)
+                .ToListAsync();
+
+            contactsPage = new PagedResult<AppUser>(items, currentPage, PageSize, totalCount);
+        }
+        finally
+        {
+            isLoading = false;
+        }
     }
 
     private async Task CallContactAsync(string username)
