@@ -2,8 +2,10 @@
 @attribute [Authorize(Roles = "Admin")]
 @layout MainLayout
 @rendermode InteractiveServer
+@using System.Globalization
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ICallLogService CallLogs
+@inject NavigationManager Navigation
 
 <PageTitle>Room activity - wincall</PageTitle>
 
@@ -16,6 +18,63 @@
         </div>
         <button type="button" class="btn-secondary" @onclick="() => LoadRoomsAsync()" disabled="@isLoading">@(isLoading ? "Refreshing..." : "Refresh")</button>
     </header>
+
+    <section class="admin-card log-management-card">
+        <div class="admin-card-heading">
+            <div>
+                <span class="wc-kicker">Data management</span>
+                <h2>Export or delete logs</h2>
+                <p class="admin-help">Choose a date range using the server's local time. Both dates are included.</p>
+            </div>
+        </div>
+
+        <div class="log-range-fields">
+            <label>
+                <span class="form-label">From</span>
+                <input type="date" class="form-control" @bind="logFromDate" />
+            </label>
+            <label>
+                <span class="form-label">To</span>
+                <input type="date" class="form-control" @bind="logToDate" />
+            </label>
+        </div>
+
+        <div class="log-export-actions">
+            <button type="button" class="btn-secondary" @onclick="ExportCallLogs" disabled="@isDeleting">Export call logs CSV</button>
+            <button type="button" class="btn-secondary" @onclick="ExportRoomLogs" disabled="@isDeleting">Export room logs CSV</button>
+        </div>
+
+        <div class="log-delete-panel">
+            <h3>Delete logs in this range</h3>
+            <p class="admin-help">Deletion is permanent. Export the call and room CSV files first so you have a copy.</p>
+
+            @if (deleteConfirmationNumber is int confirmationNumber)
+            {
+                <div class="log-confirmation-box">
+                    <p>Type this six-digit number to confirm:</p>
+                    <strong class="log-confirmation-code">@confirmationNumber.ToString("D6", CultureInfo.InvariantCulture)</strong>
+                    <input type="text" class="form-control log-confirmation-input" @bind="deleteConfirmationInput" @bind:event="oninput" inputmode="numeric" autocomplete="off" maxlength="6" aria-label="Deletion confirmation number" />
+                    <div class="log-confirmation-actions">
+                        <button type="button" class="btn-secondary log-delete-button" @onclick="DeleteLogsAsync" disabled="@isDeleting">@(isDeleting ? "Deleting..." : "Delete both log types")</button>
+                        <button type="button" class="btn-secondary" @onclick="CancelDeletion" disabled="@isDeleting">Cancel</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button type="button" class="btn-secondary log-delete-button" @onclick="PrepareDeletion" disabled="@isDeleting">Prepare deletion</button>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(logActionError))
+        {
+            <div class="auth-alert auth-alert-error" role="alert">@logActionError</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(logActionMessage))
+        {
+            <div class="auth-alert auth-alert-success" role="status">@logActionMessage</div>
+        }
+    </section>
 
     @if (roomPage is null)
     {
@@ -136,6 +195,13 @@
     private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
     private int currentPage = 1;
     private bool isLoading;
+    private DateTime logFromDate = DateTime.Today.AddDays(-30);
+    private DateTime logToDate = DateTime.Today;
+    private int? deleteConfirmationNumber;
+    private string deleteConfirmationInput = string.Empty;
+    private string logActionError = string.Empty;
+    private string logActionMessage = string.Empty;
+    private bool isDeleting;
 
     protected override async Task OnInitializedAsync()
     {
@@ -166,6 +232,98 @@
 
         currentPage = page;
         await LoadRoomsAsync();
+    }
+
+    private void ExportCallLogs() => ExportLogs("calls.csv");
+
+    private void ExportRoomLogs() => ExportLogs("rooms.csv");
+
+    private void ExportLogs(string endpoint)
+    {
+        if (!TryGetLogDateRange(out _, out _))
+        {
+            return;
+        }
+
+        logActionError = string.Empty;
+        logActionMessage = string.Empty;
+        var from = logFromDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var to = logToDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Navigation.NavigateTo($"/api/admin/logs/{endpoint}?from={from}&to={to}", forceLoad: true);
+    }
+
+    private void PrepareDeletion()
+    {
+        if (!TryGetLogDateRange(out _, out _))
+        {
+            return;
+        }
+
+        deleteConfirmationInput = string.Empty;
+        deleteConfirmationNumber = System.Security.Cryptography.RandomNumberGenerator.GetInt32(100000, 1000000);
+        logActionError = string.Empty;
+        logActionMessage = string.Empty;
+    }
+
+    private void CancelDeletion()
+    {
+        deleteConfirmationNumber = null;
+        deleteConfirmationInput = string.Empty;
+        logActionError = string.Empty;
+    }
+
+    private async Task DeleteLogsAsync()
+    {
+        if (deleteConfirmationNumber is not int confirmationNumber)
+        {
+            return;
+        }
+
+        if (!string.Equals(deleteConfirmationInput.Trim(), confirmationNumber.ToString("D6", CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            logActionError = "The confirmation number does not match.";
+            return;
+        }
+
+        if (!TryGetLogDateRange(out var fromUtc, out var toUtcExclusive))
+        {
+            return;
+        }
+
+        isDeleting = true;
+        logActionError = string.Empty;
+        logActionMessage = string.Empty;
+        try
+        {
+            var result = await CallLogs.DeleteAdminLogsAsync(currentUser, fromUtc, toUtcExclusive);
+            deleteConfirmationNumber = null;
+            deleteConfirmationInput = string.Empty;
+            logActionMessage = $"Deleted {result.CallLogsDeleted} call log(s) and {result.RoomLogsDeleted} room log(s).";
+            currentPage = 1;
+            await LoadRoomsAsync();
+        }
+        finally
+        {
+            isDeleting = false;
+        }
+    }
+
+    private bool TryGetLogDateRange(out DateTime fromUtc, out DateTime toUtcExclusive)
+    {
+        fromUtc = default;
+        toUtcExclusive = default;
+        if (logFromDate.Date > logToDate.Date)
+        {
+            logActionError = "The end date must be on or after the start date.";
+            logActionMessage = string.Empty;
+            return false;
+        }
+
+        var localFrom = DateTime.SpecifyKind(logFromDate.Date, DateTimeKind.Unspecified);
+        var localToExclusive = DateTime.SpecifyKind(logToDate.Date.AddDays(1), DateTimeKind.Unspecified);
+        fromUtc = TimeZoneInfo.ConvertTimeToUtc(localFrom, TimeZoneInfo.Local);
+        toUtcExclusive = TimeZoneInfo.ConvertTimeToUtc(localToExclusive, TimeZoneInfo.Local);
+        return true;
     }
 
     private static string FormatDateTime(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm:ss tt");

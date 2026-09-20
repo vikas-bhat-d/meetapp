@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Security.Claims;
+using System.Text;
 using livekitmeet.Data;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -48,6 +50,8 @@ public sealed record AdminCallRoomLogItem(
     DateTime? EndedAtUtc,
     IReadOnlyList<CallParticipantLogItem> Participants,
     IReadOnlyList<CallInvitationLogItem> Invitations);
+
+public sealed record AdminLogDeletionResult(int CallLogsDeleted, int RoomLogsDeleted);
 
 public sealed record CallRoomHistoryItem(
     Guid Id,
@@ -128,6 +132,24 @@ public interface ICallLogService
         ClaimsPrincipal user,
         int page = 1,
         int pageSize = 20,
+        CancellationToken cancellationToken = default);
+
+    Task<string> ExportAdminCallLogsCsvAsync(
+        ClaimsPrincipal user,
+        DateTime fromUtc,
+        DateTime toUtcExclusive,
+        CancellationToken cancellationToken = default);
+
+    Task<string> ExportAdminRoomLogsCsvAsync(
+        ClaimsPrincipal user,
+        DateTime fromUtc,
+        DateTime toUtcExclusive,
+        CancellationToken cancellationToken = default);
+
+    Task<AdminLogDeletionResult> DeleteAdminLogsAsync(
+        ClaimsPrincipal user,
+        DateTime fromUtc,
+        DateTime toUtcExclusive,
         CancellationToken cancellationToken = default);
 }
 
@@ -832,6 +854,267 @@ public sealed class CallLogService : ICallLogService
 
                 return new PagedResult<AdminCallRoomLogItem>(items, page, pageSize, totalCount);
     }
+
+            public async Task<string> ExportAdminCallLogsCsvAsync(
+                ClaimsPrincipal user,
+                DateTime fromUtc,
+                DateTime toUtcExclusive,
+                CancellationToken cancellationToken = default)
+            {
+                EnsureAdmin(user);
+                ValidateDateRange(fromUtc, toUtcExclusive);
+
+                var logs = await _db.CallLogs
+                    .AsNoTracking()
+                    .Include(log => log.Caller)
+                    .Include(log => log.Recipient)
+                    .Where(log => log.CreatedAtUtc >= fromUtc && log.CreatedAtUtc < toUtcExclusive)
+                    .OrderBy(log => log.CreatedAtUtc)
+                    .ToListAsync(cancellationToken);
+
+                var csv = new StringBuilder();
+                AppendCsvRow(csv,
+                    "Id",
+                    "InvitationId",
+                    "CallerUserName",
+                    "CallerDisplayName",
+                    "RecipientUserName",
+                    "RecipientDisplayName",
+                    "RoomName",
+                    "RoomUrl",
+                    "Status",
+                    "CreatedAtUtc",
+                    "AnsweredAtUtc",
+                    "EndedAtUtc",
+                    "DurationSeconds");
+
+                foreach (var log in logs)
+                {
+                    AppendCsvRow(csv,
+                        log.Id,
+                        log.InvitationId,
+                        log.Caller.UserName,
+                        log.Caller.DisplayName,
+                        log.Recipient.UserName,
+                        log.Recipient.DisplayName,
+                        log.RoomName,
+                        log.RoomUrl,
+                        log.Status,
+                        log.CreatedAtUtc,
+                        log.AnsweredAtUtc,
+                        log.EndedAtUtc,
+                        log.DurationSeconds);
+                }
+
+                return csv.ToString();
+            }
+
+            public async Task<string> ExportAdminRoomLogsCsvAsync(
+                ClaimsPrincipal user,
+                DateTime fromUtc,
+                DateTime toUtcExclusive,
+                CancellationToken cancellationToken = default)
+            {
+                EnsureAdmin(user);
+                ValidateDateRange(fromUtc, toUtcExclusive);
+
+                var rooms = await _db.CallRoomLogs
+                    .AsNoTracking()
+                    .Include(room => room.Participants)
+                        .ThenInclude(session => session.User)
+                    .Where(room => room.CreatedAtUtc >= fromUtc && room.CreatedAtUtc < toUtcExclusive)
+                    .OrderBy(room => room.CreatedAtUtc)
+                    .ToListAsync(cancellationToken);
+
+                var invitations = await _db.CallLogs
+                    .AsNoTracking()
+                    .Include(log => log.Caller)
+                    .Include(log => log.Recipient)
+                    .Where(log => _db.CallRoomLogs.Any(room =>
+                        room.CreatedAtUtc >= fromUtc &&
+                        room.CreatedAtUtc < toUtcExclusive &&
+                        room.RoomName == log.RoomName))
+                    .OrderBy(log => log.CreatedAtUtc)
+                    .ToListAsync(cancellationToken);
+
+                var invitationsByRoom = invitations.ToLookup(log => log.RoomName, StringComparer.Ordinal);
+                var csv = new StringBuilder();
+                AppendCsvRow(csv,
+                    "RecordType",
+                    "RoomId",
+                    "RoomName",
+                    "RoomUrl",
+                    "RoomCreatedAtUtc",
+                    "RoomStartedAtUtc",
+                    "RoomEndedAtUtc",
+                    "UserId",
+                    "UserName",
+                    "DisplayName",
+                    "JoinedAtUtc",
+                    "LeftAtUtc",
+                    "ParticipantDurationSeconds",
+                    "ParticipantStatus",
+                    "InvitationId",
+                    "CallerUserName",
+                    "CallerDisplayName",
+                    "RecipientUserName",
+                    "RecipientDisplayName",
+                    "InvitationStatus",
+                    "InvitationCreatedAtUtc",
+                    "InvitationAnsweredAtUtc",
+                    "InvitationEndedAtUtc",
+                    "InvitationDurationSeconds");
+
+                foreach (var room in rooms)
+                {
+                    AppendCsvRow(csv,
+                        "Room",
+                        room.Id,
+                        room.RoomName,
+                        room.RoomUrl,
+                        room.CreatedAtUtc,
+                        room.StartedAtUtc,
+                        room.EndedAtUtc,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
+
+                    foreach (var participant in room.Participants.OrderBy(session => session.JoinedAtUtc))
+                    {
+                        var effectiveLeftAtUtc = participant.LeftAtUtc ?? room.EndedAtUtc;
+                        var isActive = participant.LeftAtUtc is null && room.EndedAtUtc is null;
+                        var durationSeconds = participant.DurationSeconds ??
+                            CalculateDurationSeconds(participant.JoinedAtUtc, effectiveLeftAtUtc ?? DateTime.UtcNow) ?? 0;
+
+                        AppendCsvRow(csv,
+                            "Participant",
+                            room.Id,
+                            room.RoomName,
+                            room.RoomUrl,
+                            room.CreatedAtUtc,
+                            room.StartedAtUtc,
+                            room.EndedAtUtc,
+                            participant.UserId,
+                            participant.User.UserName,
+                            participant.User.DisplayName,
+                            participant.JoinedAtUtc,
+                            effectiveLeftAtUtc,
+                            durationSeconds,
+                            isActive ? "Active" : "Ended",
+                            participant.InvitationId,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null);
+                    }
+
+                    foreach (var invitation in invitationsByRoom[room.RoomName])
+                    {
+                        AppendCsvRow(csv,
+                            "Invitation",
+                            room.Id,
+                            room.RoomName,
+                            room.RoomUrl,
+                            room.CreatedAtUtc,
+                            room.StartedAtUtc,
+                            room.EndedAtUtc,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            invitation.InvitationId,
+                            invitation.Caller.UserName,
+                            invitation.Caller.DisplayName,
+                            invitation.Recipient.UserName,
+                            invitation.Recipient.DisplayName,
+                            invitation.Status,
+                            invitation.CreatedAtUtc,
+                            invitation.AnsweredAtUtc,
+                            invitation.EndedAtUtc,
+                            invitation.DurationSeconds);
+                    }
+                }
+
+                return csv.ToString();
+            }
+
+            public async Task<AdminLogDeletionResult> DeleteAdminLogsAsync(
+                ClaimsPrincipal user,
+                DateTime fromUtc,
+                DateTime toUtcExclusive,
+                CancellationToken cancellationToken = default)
+            {
+                EnsureAdmin(user);
+                ValidateDateRange(fromUtc, toUtcExclusive);
+
+                await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+                var callLogsDeleted = await _db.CallLogs
+                    .Where(log => log.CreatedAtUtc >= fromUtc && log.CreatedAtUtc < toUtcExclusive)
+                    .ExecuteDeleteAsync(cancellationToken);
+                var roomLogsDeleted = await _db.CallRoomLogs
+                    .Where(room => room.CreatedAtUtc >= fromUtc && room.CreatedAtUtc < toUtcExclusive)
+                    .ExecuteDeleteAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+
+                return new AdminLogDeletionResult(callLogsDeleted, roomLogsDeleted);
+            }
+
+            private static void EnsureAdmin(ClaimsPrincipal user)
+            {
+                if (user.Identity?.IsAuthenticated != true || !user.IsInRole("Admin"))
+                {
+                    throw new UnauthorizedAccessException("Administrator access is required.");
+                }
+            }
+
+            private static void ValidateDateRange(DateTime fromUtc, DateTime toUtcExclusive)
+            {
+                if (fromUtc >= toUtcExclusive)
+                {
+                    throw new ArgumentException("The log date range must have an end after its start.");
+                }
+            }
+
+            private static void AppendCsvRow(StringBuilder csv, params object?[] values)
+            {
+                csv.AppendLine(string.Join(",", values.Select(FormatCsvValue)));
+            }
+
+            private static string FormatCsvValue(object? value)
+            {
+                var text = value switch
+                {
+                    null => string.Empty,
+                    DateTime dateTime => DateTime.SpecifyKind(dateTime, DateTimeKind.Utc).ToString("O", CultureInfo.InvariantCulture),
+                    IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+                    _ => value.ToString() ?? string.Empty
+                };
+
+                return $"\"{text.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+            }
 
     private async Task<CallRoomLog> GetOrCreateRoomAsync(
         string roomName,

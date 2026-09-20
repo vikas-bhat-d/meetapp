@@ -1664,6 +1664,98 @@ svg {
     margin-bottom: 0;
 }
 
+.log-management-card {
+    margin-bottom: 1.25rem;
+}
+
+.log-management-card .admin-card-heading {
+    align-items: flex-start;
+}
+
+.log-management-card .admin-card-heading p {
+    margin: 0.35rem 0 0;
+}
+
+.log-range-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(180px, 260px));
+    gap: 1rem;
+}
+
+.log-range-fields label {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.log-range-fields .form-label {
+    margin-bottom: 0;
+}
+
+.log-export-actions,
+.log-confirmation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.log-export-actions {
+    margin-top: 1rem;
+}
+
+.log-delete-panel {
+    border-top: 1px solid #e1e7e4;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+}
+
+.log-delete-panel h3 {
+    margin: 0 0 0.35rem;
+    color: #1b2b31;
+    font-size: 1rem;
+}
+
+.log-delete-panel .admin-help {
+    margin: 0 0 1rem;
+}
+
+.log-delete-button {
+    background: #8a3030;
+    border-color: #8a3030;
+}
+
+.log-delete-button:hover {
+    background: #6f2525;
+}
+
+.log-confirmation-box {
+    max-width: 460px;
+    padding: 1rem;
+    border: 1px solid #efb3ae;
+    border-radius: 0.5rem;
+    background: #fff7f5;
+}
+
+.log-confirmation-box p {
+    margin: 0 0 0.45rem;
+    color: #6e3f3b;
+    font-size: 0.88rem;
+}
+
+.log-confirmation-code {
+    display: block;
+    margin-bottom: 0.75rem;
+    color: #8a3030;
+    font-size: 1.35rem;
+}
+
+.log-confirmation-input {
+    max-width: 180px;
+}
+
+.log-confirmation-actions {
+    margin-top: 0.85rem;
+}
+
 .room-log-list {
     display: grid;
     gap: 1rem;
@@ -1677,6 +1769,24 @@ svg {
     margin-top: 1.25rem;
     color: #5e7076;
     font-size: 0.82rem;
+}
+
+@media (max-width: 540px) {
+    .log-range-fields {
+        grid-template-columns: 1fr;
+    }
+
+    .log-export-actions,
+    .log-confirmation-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .log-export-actions .btn-secondary,
+    .log-confirmation-actions .btn-secondary,
+    .log-delete-panel > .btn-secondary {
+        width: 100%;
+    }
 }
 
 .wc-pagination-button {

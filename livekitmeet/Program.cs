@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Security.Claims;
@@ -43,6 +44,43 @@ static string BuildLoginRedirect(string? returnUrl, string? error = null)
     }
 
     return query.Count == 0 ? "/login" : $"/login?{string.Join('&', query)}";
+}
+
+static bool TryParseAdminDateRange(
+    string? fromValue,
+    string? toValue,
+    out DateTime fromUtc,
+    out DateTime toUtcExclusive,
+    out string error)
+{
+    fromUtc = default;
+    toUtcExclusive = default;
+    error = string.Empty;
+
+    if (!DateTime.TryParseExact(fromValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fromDate) ||
+        !DateTime.TryParseExact(toValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var toDate))
+    {
+        error = "Both from and to dates are required in yyyy-MM-dd format.";
+        return false;
+    }
+
+    if (fromDate.Date > toDate.Date)
+    {
+        error = "The end date must be on or after the start date.";
+        return false;
+    }
+
+    if (toDate.Date == DateTime.MaxValue.Date)
+    {
+        error = "The end date is out of range.";
+        return false;
+    }
+
+    var localFrom = DateTime.SpecifyKind(fromDate.Date, DateTimeKind.Unspecified);
+    var localToExclusive = DateTime.SpecifyKind(toDate.Date.AddDays(1), DateTimeKind.Unspecified);
+    fromUtc = TimeZoneInfo.ConvertTimeToUtc(localFrom, TimeZoneInfo.Local);
+    toUtcExclusive = TimeZoneInfo.ConvertTimeToUtc(localToExclusive, TimeZoneInfo.Local);
+    return true;
 }
 
 builder.Services.AddRazorComponents()
@@ -392,6 +430,46 @@ app.MapPost("/api/auth/change-password", async (HttpContext context, IAuthServic
     authService.ClearAuthCookies(context);
     return Results.Redirect("/login?changed=1");
 }).RequireAuthorization();
+
+app.MapGet("/api/admin/logs/calls.csv", async (
+    HttpContext context,
+    string? from,
+    string? to,
+    ICallLogService callLogs) =>
+{
+    if (!TryParseAdminDateRange(from, to, out var fromUtc, out var toUtcExclusive, out var error))
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    var csv = await callLogs.ExportAdminCallLogsCsvAsync(
+        context.User,
+        fromUtc,
+        toUtcExclusive,
+        context.RequestAborted);
+    var fileName = $"call-logs-{from}-to-{to}.csv";
+    return Results.File(new UTF8Encoding(true).GetBytes(csv), "text/csv; charset=utf-8", fileName);
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
+
+app.MapGet("/api/admin/logs/rooms.csv", async (
+    HttpContext context,
+    string? from,
+    string? to,
+    ICallLogService callLogs) =>
+{
+    if (!TryParseAdminDateRange(from, to, out var fromUtc, out var toUtcExclusive, out var error))
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    var csv = await callLogs.ExportAdminRoomLogsCsvAsync(
+        context.User,
+        fromUtc,
+        toUtcExclusive,
+        context.RequestAborted);
+    var fileName = $"room-logs-{from}-to-{to}.csv";
+    return Results.File(new UTF8Encoding(true).GetBytes(csv), "text/csv; charset=utf-8", fileName);
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 app.MapPost("/api/call-invitations/{invitationId:guid}/accept", async (
     Guid invitationId,
