@@ -1,14 +1,10 @@
-using System.Media;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Threading;
 
 namespace LiveKitMeet.Tray;
 
 public sealed class IncomingCallWindow : Window
 {
-    private readonly DispatcherTimer _ringTimer = new() { Interval = TimeSpan.FromSeconds(1.2) };
-
     public IncomingCallWindow(CallInvitationMessage invitation)
     {
         Title = "Incoming LiveKit call";
@@ -76,9 +72,6 @@ public sealed class IncomingCallWindow : Window
         buttons.Children.Add(decline);
         panel.Children.Add(buttons);
         Content = panel;
-
-        _ringTimer.Tick += (_, _) => SystemSounds.Exclamation.Play();
-        Closed += (_, _) => _ringTimer.Stop();
     }
 
     public bool ClosedByRemoteStatus { get; private set; }
@@ -94,10 +87,4 @@ public sealed class IncomingCallWindow : Window
         Close();
     }
 
-    protected override void OnContentRendered(EventArgs e)
-    {
-        base.OnContentRendered(e);
-        SystemSounds.Exclamation.Play();
-        _ringTimer.Start();
-    }
 }

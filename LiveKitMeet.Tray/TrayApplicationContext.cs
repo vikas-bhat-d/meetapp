@@ -1,4 +1,3 @@
-using System.Media;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -17,6 +16,7 @@ public sealed class TrayApplicationContext : IDisposable
     private readonly MenuItem _signOutItem;
     private readonly TraySettings _settings;
     private readonly AuthClient _authClient = new();
+    private readonly TrayAudioPlayer _audioPlayer;
     private readonly Dispatcher _dispatcher;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly SemaphoreSlim _webSessionLock = new(1, 1);
@@ -33,6 +33,7 @@ public sealed class TrayApplicationContext : IDisposable
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _settings = TraySettings.Load();
+        _audioPlayer = new TrayAudioPlayer(_settings);
 
         _statusItem = new MenuItem { Header = "Not connected", IsEnabled = false };
         var openMeetItem = new MenuItem { Header = "Open Meet" };
@@ -314,16 +315,26 @@ public sealed class TrayApplicationContext : IDisposable
     private async Task ShowIncomingCallAsync(CallInvitationMessage invitation)
     {
         TrayDiagnosticLog.Write($"Incoming invitation shown invitation={invitation.InvitationId:D} room={invitation.RoomName}");
-        SystemSounds.Exclamation.Play();
 
         var window = new IncomingCallWindow(invitation);
         _incomingCallWindows[invitation.InvitationId] = window;
+        _audioPlayer.StartRingtone(invitation.InvitationId);
         try
         {
-            var accepted = window.ShowDialog() == true;
+            bool accepted;
+            try
+            {
+                accepted = window.ShowDialog() == true;
+            }
+            finally
+            {
+                _audioPlayer.StopRingtone(invitation.InvitationId);
+            }
+
             if (accepted)
             {
                 TrayDiagnosticLog.Write($"Accept selected invitation={invitation.InvitationId:D}");
+                _audioPlayer.PlayAcceptSound();
                 if (await ReportCallOutcomeAsync(invitation, "accept"))
                 {
                     TrayDiagnosticLog.Write($"Accept succeeded; opening room invitation={invitation.InvitationId:D} url={invitation.RoomUrl}");
@@ -339,9 +350,10 @@ public sealed class TrayApplicationContext : IDisposable
                         MessageBoxImage.Information);
                 }
             }
-            else if (!window.ClosedByRemoteStatus)
+            else if (!_exitStarted && !window.ClosedByRemoteStatus)
             {
                 TrayDiagnosticLog.Write($"Decline selected invitation={invitation.InvitationId:D}");
+                _audioPlayer.PlayDeclineSound();
                 await ReportCallOutcomeAsync(invitation, "decline");
             }
         }
@@ -483,6 +495,7 @@ public sealed class TrayApplicationContext : IDisposable
         _exitStarted = true;
         _taskbarIcon.Visibility = Visibility.Hidden;
         _lifetimeCts.Cancel();
+        _audioPlayer.StopAll();
         foreach (var window in _incomingCallWindows.Values.ToArray())
         {
             window.CloseForApplicationExit();
@@ -515,6 +528,7 @@ public sealed class TrayApplicationContext : IDisposable
         }
 
         _authClient.Dispose();
+        _audioPlayer.Dispose();
         _webSessionLock.Dispose();
         _taskbarIcon.Dispose();
         _lifetimeCts.Dispose();
@@ -533,6 +547,7 @@ public sealed class TrayApplicationContext : IDisposable
         {
             _lifetimeCts.Cancel();
             _taskbarIcon.Dispose();
+            _audioPlayer.Dispose();
             _authClient.Dispose();
             _webSessionLock.Dispose();
             _lifetimeCts.Dispose();

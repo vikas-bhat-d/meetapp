@@ -13,6 +13,9 @@ public sealed class TraySettings
 
     public string ServerUrl { get; set; } = "https://192.168.29.214:8443";
     public string? ProtectedRefreshToken { get; set; }
+    public string RingtonePath { get; set; } = "./ringtone.mp3";
+    public string? AcceptSoundPath { get; set; }
+    public string? DeclineSoundPath { get; set; }
 
     public static TraySettings Load()
     {
