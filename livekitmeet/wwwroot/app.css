@@ -785,13 +785,17 @@ input:focus-visible {
 
 .wc-history-result.declined,
 .wc-history-result.cancelled,
-.wc-history-result.failed {
+.wc-history-result.failed,
+.wc-history-result.not-connected,
+.wc-history-result.not-received {
     color: #c74750;
 }
 
 .wc-history-result.declined span,
 .wc-history-result.cancelled span,
-.wc-history-result.failed span {
+.wc-history-result.failed span,
+.wc-history-result.not-connected span,
+.wc-history-result.not-received span {
     color: #c74750;
 }
 
@@ -799,6 +803,10 @@ input:focus-visible {
 .wc-history-result.ended span,
 .wc-history-result.completed span {
     color: var(--wc-green);
+}
+
+.wc-history-result.calling span {
+    color: var(--wc-red);
 }
 
 .wc-history-result.in-progress span {

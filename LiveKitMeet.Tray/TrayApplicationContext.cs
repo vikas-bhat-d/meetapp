@@ -13,6 +13,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly TraySettings _settings;
     private readonly AuthClient _authClient = new();
     private readonly SynchronizationContext _uiContext;
+    private readonly Dictionary<Guid, IncomingCallForm> _incomingCallForms = new();
     private SignalRInvitationClient? _invitationClient;
 
     public TrayApplicationContext()
@@ -97,6 +98,7 @@ public sealed class TrayApplicationContext : ApplicationContext
                 _settings.ServerUrl,
                 tokens,
                 HandleInvitationAsync,
+                HandleInvitationClosed,
                 status => SetStatus(status, status is "Connected"),
                 refreshToken =>
                 {
@@ -127,43 +129,82 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async void ShowIncomingCall(CallInvitationMessage invitation)
     {
+        TrayDiagnosticLog.Write($"Incoming invitation shown invitation={invitation.InvitationId:D} room={invitation.RoomName}");
         SystemSounds.Exclamation.Play();
         _notifyIcon.ShowBalloonTip(3000, "Incoming LiveKit call", $"{invitation.FromDisplayName} is calling you.", ToolTipIcon.Info);
 
         using var form = new IncomingCallForm(invitation);
-        if (form.ShowDialog() == DialogResult.OK)
+        _incomingCallForms[invitation.InvitationId] = form;
+        try
         {
-            await ReportCallOutcomeAsync(invitation, "accept");
-            OpenRoomUrl(invitation.RoomUrl);
+            if (form.ShowDialog() == DialogResult.OK)
+            {
+                TrayDiagnosticLog.Write($"Accept selected invitation={invitation.InvitationId:D}");
+                if (await ReportCallOutcomeAsync(invitation, "accept"))
+                {
+                    TrayDiagnosticLog.Write($"Accept succeeded; opening room invitation={invitation.InvitationId:D} url={invitation.RoomUrl}");
+                    OpenRoomUrl(invitation.RoomUrl);
+                }
+                else
+                {
+                    TrayDiagnosticLog.Write($"Accept failed invitation={invitation.InvitationId:D}");
+                    MessageBox.Show(
+                        "This invitation is no longer available.",
+                        "LiveKit Meet",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+            else if (!form.ClosedByRemoteStatus)
+            {
+                TrayDiagnosticLog.Write($"Decline selected invitation={invitation.InvitationId:D}");
+                await ReportCallOutcomeAsync(invitation, "decline");
+            }
         }
-        else
+        finally
         {
-            await ReportCallOutcomeAsync(invitation, "decline");
+            _incomingCallForms.Remove(invitation.InvitationId);
         }
     }
 
-    private async Task ReportCallOutcomeAsync(CallInvitationMessage invitation, string outcome)
+    private void HandleInvitationClosed(Guid invitationId, string status)
+    {
+        _uiContext.Post(_ =>
+        {
+            if (_incomingCallForms.TryGetValue(invitationId, out var form) && !form.IsDisposed)
+            {
+                form.CloseByRemoteStatus();
+            }
+        }, null);
+    }
+
+    private async Task<bool> ReportCallOutcomeAsync(CallInvitationMessage invitation, string outcome)
     {
         try
         {
             if (_invitationClient is not null)
             {
-                await _invitationClient.ReportCallOutcomeAsync(invitation.InvitationId, outcome);
+                return await _invitationClient.ReportCallOutcomeAsync(invitation.InvitationId, outcome);
             }
         }
         catch
         {
+            TrayDiagnosticLog.Write($"Outcome request threw invitation={invitation.InvitationId:D} outcome={outcome}");
         }
+
+        return false;
     }
 
     private void OpenRoomUrl(string roomUrl)
     {
         if (!Uri.TryCreate(roomUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
         {
+            TrayDiagnosticLog.Write($"Room URL rejected url={roomUrl}");
             MessageBox.Show("The invitation URL is invalid.", "LiveKit Meet", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
+        TrayDiagnosticLog.Write($"Launching room URL url={uri}");
         OpenInBrowser(uri.ToString());
     }
 
@@ -180,6 +221,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
+            TrayDiagnosticLog.Write($"Room URL launch failed url={url} error={ex.Message}");
             MessageBox.Show(
                 $"The meeting page could not be opened.\r\n\r\n{ex.Message}",
                 "LiveKit Meet",

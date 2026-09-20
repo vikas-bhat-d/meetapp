@@ -50,6 +50,8 @@ public sealed class AuthClient : IDisposable
             $"{baseUrl}/api/call-invitations/{invitationId:D}/{Uri.EscapeDataString(outcome)}");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
+        TrayDiagnosticLog.Write(
+            $"Outcome request invitation={invitationId:D} outcome={outcome} status={(int)response.StatusCode} success={response.IsSuccessStatusCode}");
         return response.IsSuccessStatusCode;
     }
 

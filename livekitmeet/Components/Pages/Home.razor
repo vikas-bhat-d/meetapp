@@ -73,11 +73,11 @@
             <a class="wc-text-link" href="/calls">View all <span aria-hidden="true">&rarr;</span></a>
         </header>
 
-        @if (recentRooms is null)
+        @if (recentCalls is null)
         {
             <div class="wc-empty-state">Loading your recent calls...</div>
         }
-        else if (recentRooms.Count == 0)
+        else if (recentCalls.Count == 0)
         {
             <div class="wc-empty-state">
                 <span class="wc-empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg></span>
@@ -88,21 +88,21 @@
         else
         {
             <div class="wc-call-list">
-                @foreach (var room in recentRooms.Take(5))
+                @foreach (var call in recentCalls.Take(5))
                 {
                     <div class="wc-call-row">
                         <div class="wc-call-person">
-                            <span class="wc-contact-avatar">RM</span>
+                            <span class="wc-contact-avatar">@GetInitials(GetContactName(call))</span>
                             <span class="wc-call-person-copy">
-                                <strong>@room.RoomName</strong>
-                                <small>@GetParticipantNames(room) · @GetRoomStatus(room)</small>
+                                <strong>@GetContactName(call)</strong>
+                                <small>@(call.IsIncoming ? "Incoming" : "Outgoing") · @GetCallStatus(call)</small>
                             </span>
                         </div>
                         <div class="wc-call-meta">
-                            <span>@GetRoomDetail(room)</span>
-                            <small>@GetTimeLabel(room.CreatedAtUtc)</small>
+                            <span>@GetCallDetail(call)</span>
+                            <small>@GetTimeLabel(call.CreatedAtUtc)</small>
                         </div>
-                        <button type="button" class="wc-row-call" @onclick="() => OpenRoom(room.RoomName)" aria-label="Open @room.RoomName" title="Open @room.RoomName">
+                        <button type="button" class="wc-row-call" @onclick="() => OpenRoom(call.RoomName)" aria-label="Open @call.RoomName" title="Open @call.RoomName">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
                         </button>
                     </div>
@@ -113,7 +113,7 @@
 </div>
 
 @code {
-    private IReadOnlyList<CallRoomHistoryItem>? recentRooms;
+    private IReadOnlyList<CallLogItem>? recentCalls;
     private string displayName = "there";
     private string firstName = "there";
     private string targetUsername = string.Empty;
@@ -125,7 +125,7 @@
                       authState.User.Identity?.Name?.Trim() ??
                       "there";
         firstName = displayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? displayName;
-        recentRooms = await CallLogs.GetRecentRoomLogsAsync(authState.User, 10);
+        recentCalls = await CallLogs.GetRecentAsync(authState.User, 10);
     }
 
     private void StartCall()
@@ -160,32 +160,25 @@
         Navigation.NavigateTo($"/rooms/{Uri.EscapeDataString(roomName)}?audio=true&video=false");
     }
 
-    private static string GetRoomStatus(CallRoomHistoryItem room) => room.Status;
+    private static string GetContactName(CallLogItem call) =>
+        string.IsNullOrWhiteSpace(call.ContactDisplayName) ? call.ContactUserName : call.ContactDisplayName;
 
-    private static string GetRoomDetail(CallRoomHistoryItem room)
-    {
-        return room.DurationSeconds is int durationSeconds
-            ? FormatDuration(TimeSpan.FromSeconds(durationSeconds))
-            : room.Status;
-    }
+    private static string GetCallStatus(CallLogItem call) => GetInvitationStatusLabel(call.Status);
 
-    private static string GetParticipantNames(CallRoomHistoryItem room)
-    {
-        var names = room.Participants
-            .Select(participant => participant.DisplayName)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return names.Length == 0 ? "No one joined" : string.Join(", ", names);
-    }
+    private static string GetCallDetail(CallLogItem call) => call.DurationSeconds is int durationSeconds
+        ? FormatDuration(TimeSpan.FromSeconds(durationSeconds))
+        : GetCallStatus(call);
 
     private static string GetInvitationStatusLabel(string status) => status switch
     {
         CallLogStatuses.Declined => "Declined",
         CallLogStatuses.Cancelled => "Cancelled",
-        CallLogStatuses.Failed => "Not connected",
+        CallLogStatuses.NotConnected => "Not connected",
+        CallLogStatuses.NotReceived => "Not received",
+        CallLogStatuses.Failed => "Delivery failed",
         CallLogStatuses.Ringing => "Calling",
-        CallLogStatuses.Answered or CallLogStatuses.Ended => "Completed",
+        CallLogStatuses.Answered => "Accepted",
+        CallLogStatuses.Ended => "Completed",
         _ => status
     };
 

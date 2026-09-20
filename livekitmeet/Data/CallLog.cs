@@ -7,6 +7,8 @@ public static class CallLogStatuses
     public const string Ended = "Ended";
     public const string Declined = "Declined";
     public const string Cancelled = "Cancelled";
+    public const string NotConnected = "NotConnected";
+    public const string NotReceived = "NotReceived";
     public const string Failed = "Failed";
 }
 

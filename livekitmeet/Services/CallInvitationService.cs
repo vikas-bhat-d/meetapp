@@ -120,7 +120,7 @@ public sealed class CallInvitationService : ICallInvitationService
             fromDisplayName,
             audioEnabled,
             videoEnabled,
-            DateTime.UtcNow.AddMinutes(2));
+            DateTime.UtcNow.Add(CallInvitationPolicy.Lifetime));
 
         await _callLogs.CreateAsync(
             invitation.InvitationId,
@@ -197,17 +197,31 @@ public sealed class CallInvitationService : ICallInvitationService
             return false;
         }
 
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
+        await _callLogs.ExpirePendingInvitationsAsync(cancellationToken);
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId && candidate.CallerId == callerId,
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Ringing)
+        if (log is null)
         {
             return false;
         }
 
-        log.Status = CallLogStatuses.Cancelled;
-        log.EndedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        var endedAtUtc = DateTime.UtcNow;
+        var updated = await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.CallerId == callerId &&
+                                candidate.Status == CallLogStatuses.Ringing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, CallLogStatuses.Cancelled)
+                    .SetProperty(candidate => candidate.EndedAtUtc, endedAtUtc),
+                cancellationToken);
+        if (updated == 0)
+        {
+            return false;
+        }
 
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.RecipientId))
@@ -224,20 +238,36 @@ public sealed class CallInvitationService : ICallInvitationService
         string actionToken,
         CancellationToken cancellationToken = default)
     {
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
+        await _callLogs.ExpirePendingInvitationsAsync(cancellationToken);
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId,
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Ringing ||
-            !ValidateDeclineActionToken(actionToken, invitationId, log.RecipientId))
+        if (log is null || !ValidateDeclineActionToken(actionToken, invitationId, log.RecipientId))
         {
             return false;
         }
 
-        log.Status = CallLogStatuses.Declined;
-        log.EndedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        var endedAtUtc = DateTime.UtcNow;
+        var updated = await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.Status == CallLogStatuses.Ringing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, CallLogStatuses.Declined)
+                    .SetProperty(candidate => candidate.EndedAtUtc, endedAtUtc),
+                cancellationToken);
+        if (updated == 0)
+        {
+            return false;
+        }
+
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.CallerId))
+            .SendAsync("CallDeclined", invitationId, cancellationToken);
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(log.RecipientId))
             .SendAsync("CallDeclined", invitationId, cancellationToken);
         await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Declined);
         return true;

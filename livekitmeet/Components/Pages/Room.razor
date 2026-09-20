@@ -8,6 +8,7 @@
 @inject ICallInvitationService CallInvitationService
 @inject ICallLogService CallLogService
 @inject CallInvitationStatusNotifier InvitationStatusNotifier
+@inject ILogger<Room> Logger
 @implements IAsyncDisposable
 
 <PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
@@ -407,10 +408,41 @@ else
             connectionStatus = "Connecting...";
             StateHasChanged();
 
+            var parsedInvitationId = Guid.TryParse(QueryInvitationId, out var invitationId)
+                ? invitationId
+                : (Guid?)null;
+            Logger.LogInformation(
+                "Room connection started. InvitationId={InvitationId} RoomName={RoomName} User={User}",
+                parsedInvitationId,
+                RoomName,
+                participantName);
+
+            var invitationAnswered = await MarkIncomingInvitationAnsweredAsync();
+            Logger.LogInformation(
+                "Room invitation answer attempt completed. InvitationId={InvitationId} Accepted={Accepted} RoomName={RoomName}",
+                parsedInvitationId,
+                invitationAnswered,
+                RoomName);
+            if (!invitationAnswered)
+            {
+                connectionStatus = "Invitation no longer available";
+                StateHasChanged();
+                return;
+            }
+
             // The protected API validates the access-token cookie and only then creates the LiveKit JWT.
+            Logger.LogInformation(
+                "Requesting LiveKit connection details. InvitationId={InvitationId} RoomName={RoomName}",
+                parsedInvitationId,
+                RoomName);
             var connDetails = await JSRuntime.InvokeAsync<ConnectionDetailsDto>(
                 "livekitBridge.fetchConnectionDetails",
                 RoomName);
+            Logger.LogInformation(
+                "LiveKit connection details received. InvitationId={InvitationId} RoomName={RoomName} ParticipantIdentity={ParticipantIdentity}",
+                parsedInvitationId,
+                RoomName,
+                connDetails.ParticipantIdentity);
 
             dotNetRef = DotNetObjectReference.Create(this);
 
@@ -432,19 +464,35 @@ else
 
             if (!joinResult.Success)
             {
+                Logger.LogWarning(
+                    "LiveKit room join returned failure. InvitationId={InvitationId} RoomName={RoomName} Error={Error}",
+                    parsedInvitationId,
+                    RoomName,
+                    joinResult.Error);
                 connectionStatus = string.IsNullOrWhiteSpace(joinResult.Error)
                     ? "Error"
                     : $"Error: {joinResult.Error}";
+                await FinalizeCallLogsAsync();
                 StateHasChanged();
                 return;
             }
 
-            await MarkIncomingInvitationAnsweredAsync();
+            Logger.LogInformation(
+                "LiveKit room join returned success. InvitationId={InvitationId} RoomName={RoomName}",
+                parsedInvitationId,
+                RoomName);
+
         }
         catch (Exception ex)
         {
             connectionStatus = "Error";
-            Console.WriteLine($"[Room] Connection error: {ex.Message}");
+            Logger.LogError(
+                ex,
+                "Room connection failed. InvitationId={InvitationId} RoomName={RoomName} User={User}",
+                QueryInvitationId,
+                RoomName,
+                participantName);
+            await FinalizeCallLogsAsync();
             StateHasChanged();
         }
     }
@@ -628,6 +676,8 @@ else
                 CallLogStatuses.Answered => $"'{invitation.UserName}' accepted the invitation.",
                 CallLogStatuses.Declined => $"'{invitation.UserName}' declined the invitation.",
                 CallLogStatuses.Cancelled => $"Invitation to '{invitation.UserName}' was cancelled.",
+                CallLogStatuses.NotConnected => $"'{invitation.UserName}' could not connect.",
+                CallLogStatuses.NotReceived => $"'{invitation.UserName}' did not receive the invitation.",
                 _ => $"Invitation to '{invitation.UserName}' is no longer ringing."
             };
             StateHasChanged();
@@ -638,6 +688,11 @@ else
     public async Task OnRoomConnected(string roomName, string identity)
     {
         connectionStatus = "Connected";
+        Logger.LogInformation(
+            "LiveKit room connected callback received. InvitationId={InvitationId} RoomName={RoomName} Identity={Identity}",
+            QueryInvitationId,
+            roomName,
+            identity);
         await StartParticipantSessionAsync(roomName);
         await InvokeAsync(StateHasChanged);
     }
@@ -653,6 +708,11 @@ else
     public async Task OnConnectionError(string message)
     {
         connectionStatus = "Error: " + message;
+        Logger.LogError(
+            "LiveKit connection error callback received. InvitationId={InvitationId} RoomName={RoomName} Error={Error}",
+            QueryInvitationId,
+            RoomName,
+            message);
         await InvokeAsync(StateHasChanged);
     }
 
@@ -734,6 +794,11 @@ else
             roomName,
             GetShareableMeetingUrl(),
             invitationId);
+        Logger.LogInformation(
+            "Participant session attempt completed. InvitationId={InvitationId} RoomName={RoomName} SessionId={SessionId}",
+            invitationId,
+            roomName,
+            participantSessionId);
 
         if (participantLeaveRequested)
         {
@@ -765,20 +830,20 @@ else
         }
     }
 
-    private async Task MarkIncomingInvitationAnsweredAsync()
+    private async Task<bool> MarkIncomingInvitationAnsweredAsync()
     {
         if (!Guid.TryParse(QueryInvitationId, out var invitationId))
         {
-            return;
+            return true;
         }
 
         var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
-        await CallLogService.MarkAnsweredAsync(authState.User, invitationId);
+        return await CallLogService.MarkAnsweredAsync(authState.User, invitationId);
     }
 
     private async Task FinalizeCallLogsAsync()
     {
-        if (callLogsFinalized || invitationIds.Count == 0)
+        if (!hasJoined || callLogsFinalized || invitationIds.Count == 0)
         {
             return;
         }
@@ -790,15 +855,23 @@ else
             foreach (var invitationId in invitationIds)
             {
                 var ended = await CallLogService.MarkEndedAsync(authState.User, invitationId);
+                Logger.LogInformation(
+                    "Room call-log finalization returned. InvitationId={InvitationId} Ended={Ended}",
+                    invitationId,
+                    ended);
                 if (!ended)
                 {
-                    await CallInvitationService.CancelAsync(authState.User, invitationId);
+                    var cancelled = await CallInvitationService.CancelAsync(authState.User, invitationId);
+                    Logger.LogInformation(
+                        "Room pending-invitation cancellation fallback returned. InvitationId={InvitationId} Cancelled={Cancelled}",
+                        invitationId,
+                        cancelled);
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore during page unload.
+            Logger.LogError(ex, "Room call-log finalization failed. InvitationCount={InvitationCount}", invitationIds.Count);
         }
     }
 

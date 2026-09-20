@@ -6,6 +6,8 @@ public sealed class IncomingCallForm : Form
 {
     private readonly System.Windows.Forms.Timer _ringTimer = new() { Interval = 1200 };
 
+    public bool ClosedByRemoteStatus { get; private set; }
+
     public IncomingCallForm(CallInvitationMessage invitation)
     {
         Text = "Incoming LiveKit call";
@@ -60,5 +62,11 @@ public sealed class IncomingCallForm : Form
         base.OnShown(e);
         SystemSounds.Exclamation.Play();
         _ringTimer.Start();
+    }
+
+    public void CloseByRemoteStatus()
+    {
+        ClosedByRemoteStatus = true;
+        Close();
     }
 }

@@ -85,6 +85,8 @@ public interface ICallLogService
 
     Task MarkFailedAsync(Guid invitationId, CancellationToken cancellationToken = default);
 
+    Task<int> ExpirePendingInvitationsAsync(CancellationToken cancellationToken = default);
+
     Task<bool> MarkAnsweredAsync(
         ClaimsPrincipal user,
         Guid invitationId,
@@ -121,15 +123,21 @@ public sealed class CallLogService : ICallLogService
     private readonly AppDbContext _db;
     private readonly IHubContext<CallInvitationHub> _hub;
     private readonly CallInvitationStatusNotifier _statusNotifier;
+    private readonly IFirebasePushNotificationService _pushNotifications;
+    private readonly ILogger<CallLogService> _logger;
 
     public CallLogService(
         AppDbContext db,
         IHubContext<CallInvitationHub> hub,
-        CallInvitationStatusNotifier statusNotifier)
+        CallInvitationStatusNotifier statusNotifier,
+        IFirebasePushNotificationService pushNotifications,
+        ILogger<CallLogService> logger)
     {
         _db = db;
         _hub = hub;
         _statusNotifier = statusNotifier;
+        _pushNotifications = pushNotifications;
+        _logger = logger;
     }
 
     public async Task<CallLog> CreateAsync(
@@ -166,7 +174,56 @@ public sealed class CallLogService : ICallLogService
     {
         if (!TryGetUserId(user, out var userId) || string.IsNullOrWhiteSpace(roomName))
         {
+            _logger.LogWarning(
+                "Call invitation join rejected before lookup. InvitationId={InvitationId} RoomName={RoomName}",
+                invitationId,
+                roomName);
             return null;
+        }
+
+        _logger.LogInformation(
+            "Call invitation join requested. InvitationId={InvitationId} UserId={UserId} RoomName={RoomName}",
+            invitationId,
+            userId,
+            roomName);
+
+        if (invitationId is Guid incomingInvitationId)
+        {
+            await ExpirePendingInvitationsAsync(cancellationToken);
+            var invitation = await _db.CallLogs
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    candidate => candidate.InvitationId == incomingInvitationId,
+                    cancellationToken);
+            if (invitation is null)
+            {
+                _logger.LogWarning(
+                    "Call invitation join rejected because the invitation was not found. InvitationId={InvitationId} UserId={UserId}",
+                    incomingInvitationId,
+                    userId);
+                return null;
+            }
+
+            if (invitation.RecipientId != userId)
+            {
+                _logger.LogWarning(
+                    "Call invitation join rejected because the user is not the recipient. InvitationId={InvitationId} UserId={UserId} RecipientId={RecipientId} Status={Status}",
+                    incomingInvitationId,
+                    userId,
+                    invitation.RecipientId,
+                    invitation.Status);
+                return null;
+            }
+
+            if (invitation.Status is not (CallLogStatuses.Ringing or CallLogStatuses.Answered))
+            {
+                _logger.LogWarning(
+                    "Call invitation join rejected because its status is not joinable. InvitationId={InvitationId} UserId={UserId} Status={Status}",
+                    incomingInvitationId,
+                    userId,
+                    invitation.Status);
+                return null;
+            }
         }
 
         var room = await GetOrCreateRoomAsync(roomName, roomUrl, cancellationToken);
@@ -182,6 +239,11 @@ public sealed class CallLogService : ICallLogService
         {
             room.EndedAtUtc = null;
             await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Call invitation reused an active participant session. InvitationId={InvitationId} UserId={UserId} SessionId={SessionId}",
+                invitationId,
+                userId,
+                existingSession.Id);
             return existingSession.Id;
         }
 
@@ -198,6 +260,12 @@ public sealed class CallLogService : ICallLogService
         };
         _db.CallParticipantSessions.Add(session);
         await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Call participant session created. InvitationId={InvitationId} UserId={UserId} SessionId={SessionId} RoomName={RoomName}",
+            invitationId,
+            userId,
+            session.Id,
+            roomName);
         return session.Id;
     }
 
@@ -250,17 +318,76 @@ public sealed class CallLogService : ICallLogService
 
     public async Task MarkFailedAsync(Guid invitationId, CancellationToken cancellationToken = default)
     {
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId,
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Ringing)
+        if (log is null)
         {
             return;
         }
 
-        log.Status = CallLogStatuses.Failed;
-        log.EndedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.Status == CallLogStatuses.Ringing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, CallLogStatuses.Failed)
+                    .SetProperty(candidate => candidate.EndedAtUtc, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    public async Task<int> ExpirePendingInvitationsAsync(CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+        var cutoff = now.Subtract(CallInvitationPolicy.Lifetime);
+        var candidates = await _db.CallLogs
+            .AsNoTracking()
+            .Where(log => log.Status == CallLogStatuses.Ringing && log.CreatedAtUtc <= cutoff)
+            .Select(log => new { log.InvitationId, log.CallerId, log.RecipientId, log.CreatedAtUtc })
+            .ToListAsync(cancellationToken);
+        var expiredCount = 0;
+
+        foreach (var candidate in candidates)
+        {
+            var expiredAtUtc = candidate.CreatedAtUtc.Add(CallInvitationPolicy.Lifetime);
+            var updated = await _db.CallLogs
+                .Where(log => log.InvitationId == candidate.InvitationId &&
+                              log.Status == CallLogStatuses.Ringing &&
+                              log.CreatedAtUtc <= cutoff)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(log => log.Status, CallLogStatuses.NotReceived)
+                        .SetProperty(log => log.EndedAtUtc, expiredAtUtc),
+                    cancellationToken);
+            if (updated == 0)
+            {
+                continue;
+            }
+
+            expiredCount++;
+            await _statusNotifier.NotifyAsync(
+                candidate.CallerId,
+                candidate.InvitationId,
+                CallLogStatuses.NotReceived);
+            await _hub.Clients
+                .Group(CallInvitationHub.UserGroup(candidate.RecipientId))
+                .SendAsync("CallExpired", candidate.InvitationId, cancellationToken);
+            try
+            {
+                await _pushNotifications.SendCancelAsync(
+                    candidate.RecipientId,
+                    candidate.InvitationId,
+                    cancellationToken);
+            }
+            catch
+            {
+                // The database outcome remains authoritative if push cleanup fails.
+            }
+        }
+
+        return expiredCount;
     }
 
     public async Task<bool> MarkAnsweredAsync(
@@ -270,24 +397,92 @@ public sealed class CallLogService : ICallLogService
     {
         if (!TryGetUserId(user, out var userId))
         {
+            _logger.LogWarning(
+                "Call invitation answer rejected because the user could not be identified. InvitationId={InvitationId}",
+                invitationId);
             return false;
         }
 
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
-            candidate => candidate.InvitationId == invitationId && candidate.RecipientId == userId,
+        await ExpirePendingInvitationsAsync(cancellationToken);
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+            candidate => candidate.InvitationId == invitationId,
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Ringing)
+        if (log is null)
         {
+            _logger.LogWarning(
+                "Call invitation answer rejected because the invitation was not found. InvitationId={InvitationId} UserId={UserId}",
+                invitationId,
+                userId);
+            return false;
+        }
+        if (log.RecipientId != userId)
+        {
+            _logger.LogWarning(
+                "Call invitation answer rejected because the user is not the recipient. InvitationId={InvitationId} UserId={UserId} RecipientId={RecipientId} Status={Status}",
+                invitationId,
+                userId,
+                log.RecipientId,
+                log.Status);
+            return false;
+        }
+        if (log.Status == CallLogStatuses.Answered)
+        {
+            _logger.LogInformation(
+                "Call invitation was already answered. InvitationId={InvitationId} UserId={UserId}",
+                invitationId,
+                userId);
+            return true;
+        }
+        if (log.Status != CallLogStatuses.Ringing)
+        {
+            _logger.LogWarning(
+                "Call invitation answer rejected because its status is not Ringing. InvitationId={InvitationId} UserId={UserId} Status={Status}",
+                invitationId,
+                userId,
+                log.Status);
             return false;
         }
 
-        log.Status = CallLogStatuses.Answered;
-        log.AnsweredAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        var answeredAtUtc = DateTime.UtcNow;
+        var updated = await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.RecipientId == userId &&
+                                candidate.Status == CallLogStatuses.Ringing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, CallLogStatuses.Answered)
+                    .SetProperty(candidate => candidate.AnsweredAtUtc, answeredAtUtc),
+                cancellationToken);
+        if (updated == 0)
+        {
+            var currentStatus = await _db.CallLogs
+                .AsNoTracking()
+                .Where(candidate => candidate.InvitationId == invitationId &&
+                                    candidate.RecipientId == userId)
+                .Select(candidate => candidate.Status)
+                .SingleOrDefaultAsync(cancellationToken);
+            _logger.LogWarning(
+                "Call invitation answer lost a concurrent transition. InvitationId={InvitationId} UserId={UserId} CurrentStatus={CurrentStatus}",
+                invitationId,
+                userId,
+                currentStatus);
+            return currentStatus == CallLogStatuses.Answered;
+        }
+
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.CallerId))
             .SendAsync("CallAnswered", invitationId, cancellationToken);
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(log.RecipientId))
+            .SendAsync("CallAnswered", invitationId, cancellationToken);
         await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Answered);
+        _logger.LogInformation(
+            "Call invitation answered. InvitationId={InvitationId} UserId={UserId} CallerId={CallerId}",
+            invitationId,
+            userId,
+            log.CallerId);
         return true;
     }
 
@@ -301,19 +496,37 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
+        await ExpirePendingInvitationsAsync(cancellationToken);
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId && candidate.RecipientId == userId,
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Ringing)
+        if (log is null)
         {
             return false;
         }
 
-        log.Status = CallLogStatuses.Declined;
-        log.EndedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(cancellationToken);
+        var endedAtUtc = DateTime.UtcNow;
+        var updated = await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.RecipientId == userId &&
+                                candidate.Status == CallLogStatuses.Ringing)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, CallLogStatuses.Declined)
+                    .SetProperty(candidate => candidate.EndedAtUtc, endedAtUtc),
+                cancellationToken);
+        if (updated == 0)
+        {
+            return false;
+        }
+
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.CallerId))
+            .SendAsync("CallDeclined", invitationId, cancellationToken);
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(log.RecipientId))
             .SendAsync("CallDeclined", invitationId, cancellationToken);
         await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Declined);
         return true;
@@ -326,24 +539,71 @@ public sealed class CallLogService : ICallLogService
     {
         if (!TryGetUserId(user, out var userId))
         {
+            _logger.LogWarning(
+                "Call log end rejected because the user could not be identified. InvitationId={InvitationId}",
+                invitationId);
             return false;
         }
 
-        var log = await _db.CallLogs.SingleOrDefaultAsync(
+        var log = await _db.CallLogs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId &&
                         (candidate.CallerId == userId || candidate.RecipientId == userId),
             cancellationToken);
-        if (log is null || log.Status != CallLogStatuses.Answered)
+        if (log is null)
         {
+            _logger.LogWarning(
+                "Call log end rejected because the invitation was not found. InvitationId={InvitationId} UserId={UserId}",
+                invitationId,
+                userId);
             return false;
         }
 
         var endedAtUtc = DateTime.UtcNow;
-        log.Status = CallLogStatuses.Ended;
-        log.EndedAtUtc = endedAtUtc;
-        log.DurationSeconds = CalculateDurationSeconds(log.AnsweredAtUtc, endedAtUtc);
-        await _db.SaveChangesAsync(cancellationToken);
-        return true;
+        var durationSeconds = CalculateDurationSeconds(log.AnsweredAtUtc, endedAtUtc);
+        var recipientJoined = await _db.CallParticipantSessions
+            .AsNoTracking()
+            .AnyAsync(
+                session => session.InvitationId == invitationId &&
+                           session.UserId == log.RecipientId,
+                cancellationToken);
+        var endedStatus = recipientJoined
+            ? CallLogStatuses.Ended
+            : CallLogStatuses.NotConnected;
+        _logger.LogInformation(
+            "Call log finalization evaluated. InvitationId={InvitationId} UserId={UserId} CurrentStatus={CurrentStatus} RecipientJoined={RecipientJoined} NextStatus={NextStatus}",
+            invitationId,
+            userId,
+            log.Status,
+            recipientJoined,
+            endedStatus);
+        var updated = await _db.CallLogs
+            .Where(candidate => candidate.InvitationId == invitationId &&
+                                candidate.Status == CallLogStatuses.Answered)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, endedStatus)
+                    .SetProperty(candidate => candidate.EndedAtUtc, endedAtUtc)
+                    .SetProperty(candidate => candidate.DurationSeconds, recipientJoined ? durationSeconds : null),
+                cancellationToken);
+        if (updated > 0)
+        {
+            await _statusNotifier.NotifyAsync(log.CallerId, invitationId, endedStatus);
+            _logger.LogInformation(
+                "Call log finalization applied. InvitationId={InvitationId} Status={Status}",
+                invitationId,
+                endedStatus);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Call log finalization did not apply because the status changed concurrently. InvitationId={InvitationId} CurrentStatus={CurrentStatus}",
+                invitationId,
+                log.Status);
+        }
+
+        return updated > 0;
     }
 
     public async Task<IReadOnlyList<CallLogItem>> GetRecentAsync(
@@ -605,8 +865,11 @@ public sealed class CallLogService : ICallLogService
         return invitation.Status switch
         {
             CallLogStatuses.Declined => "Declined",
-            CallLogStatuses.Answered or CallLogStatuses.Ended => "Not connected",
-            CallLogStatuses.Failed => "Not connected",
+            CallLogStatuses.NotConnected => "Not connected",
+            CallLogStatuses.NotReceived => "Not received",
+            CallLogStatuses.Answered => "Accepted",
+            CallLogStatuses.Ended => "Completed",
+            CallLogStatuses.Failed => "Delivery failed",
             CallLogStatuses.Ringing => "Calling",
             _ => invitation.Status
         };

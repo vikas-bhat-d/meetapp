@@ -8,6 +8,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
     private readonly string _serverUrl;
     private string _refreshToken;
     private readonly Func<CallInvitationMessage, Task> _onInvitation;
+    private readonly Action<Guid, string> _onInvitationClosed;
     private readonly Action<string> _onStatusChanged;
     private readonly Action<string> _onRefreshTokenChanged;
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
@@ -21,6 +22,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         string serverUrl,
         AuthTokenResponse tokens,
         Func<CallInvitationMessage, Task> onInvitation,
+        Action<Guid, string> onInvitationClosed,
         Action<string> onStatusChanged,
         Action<string> onRefreshTokenChanged)
     {
@@ -30,6 +32,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         _accessTokenExpiresAtUtc = tokens.AccessTokenExpiresAtUtc;
         _refreshToken = tokens.RefreshToken;
         _onInvitation = onInvitation;
+        _onInvitationClosed = onInvitationClosed;
         _onStatusChanged = onStatusChanged;
         _onRefreshTokenChanged = onRefreshTokenChanged;
     }
@@ -54,6 +57,10 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         {
             _ = _onInvitation(invitation);
         });
+        foreach (var eventName in new[] { "CallAnswered", "CallDeclined", "CallCancelled", "CallExpired" })
+        {
+            _connection.On<Guid>(eventName, invitationId => _onInvitationClosed(invitationId, eventName));
+        }
         _connection.Reconnecting += error =>
         {
             _onStatusChanged("Reconnecting...");
@@ -103,15 +110,15 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         }
     }
 
-    public async Task ReportCallOutcomeAsync(Guid invitationId, string outcome)
+    public async Task<bool> ReportCallOutcomeAsync(Guid invitationId, string outcome)
     {
         var accessToken = await GetAccessTokenAsync();
         if (string.IsNullOrWhiteSpace(accessToken))
         {
-            return;
+            return false;
         }
 
-        await _authClient.ReportCallOutcomeAsync(
+        return await _authClient.ReportCallOutcomeAsync(
             _serverUrl,
             accessToken,
             invitationId,

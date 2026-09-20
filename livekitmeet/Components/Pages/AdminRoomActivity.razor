@@ -172,9 +172,12 @@
 
     private static string GetInvitationStatus(string status) => status switch
     {
-        CallLogStatuses.Answered or CallLogStatuses.Ended => "Completed",
+        CallLogStatuses.Answered => "Accepted",
+        CallLogStatuses.Ended => "Completed",
         CallLogStatuses.Declined => "Declined",
         CallLogStatuses.Cancelled => "Cancelled",
+        CallLogStatuses.NotConnected => "Not connected",
+        CallLogStatuses.NotReceived => "Not received",
         CallLogStatuses.Failed => "Failed",
         CallLogStatuses.Ringing => "Ringing",
         _ => status

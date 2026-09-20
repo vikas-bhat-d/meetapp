@@ -89,6 +89,7 @@ builder.Services.AddSingleton<CallInvitationConnectionTracker>();
 builder.Services.AddSingleton<CallInvitationStatusNotifier>();
 builder.Services.AddScoped<ICallInvitationService, CallInvitationService>();
 builder.Services.AddScoped<ICallLogService, CallLogService>();
+builder.Services.AddHostedService<CallInvitationExpiryService>();
 builder.Services.AddScoped<IFirebasePushNotificationService, FirebasePushNotificationService>();
 builder.Services.AddSingleton<ILiveKitTokenService, LiveKitTokenService>();
 
@@ -428,23 +429,34 @@ app.MapGet("/api/connection-details", (
     HttpContext context,
     string? roomName,
     string? metadata,
-    ILiveKitTokenService tokenService) =>
+    ILiveKitTokenService tokenService,
+    ILogger<Program> logger) =>
 {
     if (context.User.Identity?.IsAuthenticated != true)
     {
+        logger.LogWarning(
+            "LiveKit connection details rejected for unauthenticated request. RoomName={RoomName}",
+            roomName);
         return Results.Unauthorized();
     }
     if (string.IsNullOrWhiteSpace(roomName))
     {
+        logger.LogWarning("LiveKit connection details rejected because RoomName was empty.");
         return Results.BadRequest(new { error = "Missing required query parameter: roomName" });
     }
     try
     {
         var details = tokenService.CreateConnectionDetails(roomName.Trim(), context.User, metadata);
+        logger.LogInformation(
+            "LiveKit connection details issued. UserId={UserId} RoomName={RoomName} ParticipantIdentity={ParticipantIdentity}",
+            context.User.FindFirstValue(ClaimTypes.NameIdentifier),
+            roomName.Trim(),
+            details.ParticipantIdentity);
         return Results.Ok(details);
     }
     catch (Exception ex)
     {
+        logger.LogError(ex, "LiveKit connection details failed. RoomName={RoomName}", roomName);
         return Results.Problem(ex.Message);
     }
 }).RequireAuthorization();
