@@ -61,6 +61,34 @@ npx expo run:android
 
 For a physical device, change `expo.extra.serverUrl` in `app.json` to the computer's LAN IP, for example `http://192.168.1.10:5189`. Production should use HTTPS.
 
+## File configuration and logs
+
+On first launch, the native wrapper creates `config.json` in its app-private document directory. On Android the usual location is:
+
+```text
+/data/user/0/com.livekitmeet.mobile/files/config.json
+```
+
+The repository includes `config.json.example` with the supported shape:
+
+```json
+{
+	"serverUrl": "https://192.168.29.214:8443",
+	"retainLog": 3
+}
+```
+
+`serverUrl` is read when the app starts. `retainLog` accepts `0` through `3`: `0` disables file logging and removes stored log files, while `1`, `2`, and `3` retain that many calendar days including today. Logs are written beside the config file as `logs/YYYY-MM-DD.log`.
+
+The directory is private to the app and is not normally visible in a phone file manager. For a debug build, Android Studio Device File Explorer or these commands can inspect it:
+
+```powershell
+adb shell run-as com.livekitmeet.mobile cat files/config.json
+adb shell run-as com.livekitmeet.mobile ls files/logs
+```
+
+Replace the private `config.json` with the example or another valid JSON file, then restart the app. If the file is missing or invalid, the app recreates it from `EXPO_PUBLIC_SERVER_URL` or the `expo.extra.serverUrl` fallback.
+
 ## Build an APK
 
 ```powershell

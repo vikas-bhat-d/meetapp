@@ -382,7 +382,7 @@ Set-Location .\LiveKitMeet.Mobile
 npm ci
 ```
 
-For an Android emulator, use `http://10.0.2.2:5189` as the server URL. For a physical device, use a reachable LAN address or the Caddy HTTPS URL. The app also has a server URL setting, so a built development app can be pointed at another server without rebuilding its JavaScript bundle.
+For an Android emulator, use `http://10.0.2.2:5189` as the server URL. For a physical device, use a reachable LAN address or the Caddy HTTPS URL. The mobile wrapper creates an app-private `config.json` on first launch; use `LiveKitMeet.Mobile/config.json.example` as the template and edit the installed app's file before restarting it when the server changes.
 
 Build and install the native development APK:
 
@@ -603,7 +603,7 @@ The device routes are:
 - Physical device: use the host's LAN IP and ensure Windows Firewall allows the port.
 - Caddy HTTPS: install/trust the Caddy local root CA on the device and use the Caddy host name/IP.
 - Direct HTTP: confirm the development build has cleartext traffic enabled and that the URL uses `http://`.
-- Recheck the runtime server URL in the app settings; it is persisted in AsyncStorage.
+- Recheck the runtime `config.json` server URL in the Android app-private document directory and restart the app after changing it.
 
 ### EAS reports a missing Firebase file
 

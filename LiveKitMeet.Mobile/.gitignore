@@ -7,5 +7,7 @@ android/
 ios/
 google-services.json
 firebase-service-account.json
+config.json
+logs/
 *.jks
 *.keystore

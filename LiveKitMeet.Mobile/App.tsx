@@ -9,18 +9,17 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   Vibration,
   NativeModules
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { WebView, WebViewMessageEvent, WebViewNavigation } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { appendAppLog, loadAppConfig } from './appStorage';
 
 // ─── Background notification task ────────────────────────────────────────────
 // This task name MUST match what is passed to Notifications.registerTaskAsync.
@@ -76,6 +75,7 @@ function parseBackgroundPushData(
 TaskManager.defineTask<Notifications.NotificationTaskPayload>(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }) => {
   if (error) {
     console.warn('[BGTask] error', error);
+    await appendAppLog('Background notification task error', { error: String(error) });
     return;
   }
 
@@ -271,6 +271,9 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
   } catch (taskError) {
     // Expo Go cannot run headless tasks, but it can still receive a push token.
     console.warn('[Push] Background task registration unavailable:', taskError);
+    await appendAppLog('Background notification task registration unavailable', {
+      error: String(taskError)
+    });
   }
 
   const nativeToken = await Notifications.getDevicePushTokenAsync();
@@ -353,14 +356,10 @@ export default function App() {
   const loadFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNotificationUrlRef = useRef<string | null>(null);
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
-  const [serverUrlDraft, setServerUrlDraft] = useState(DEFAULT_SERVER_URL);
   const [configurationReady, setConfigurationReady] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
-  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [currentUrl, setCurrentUrl] = useState(DEFAULT_SERVER_URL);
   const [pushToken, setPushToken] = useState<string | null>(null);
-  const [fcmStatus, setFcmStatus] = useState('Requesting FCM token...');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mediaPermissions, setMediaPermissions] = useState<MediaPermissionResult>({
@@ -433,11 +432,6 @@ export default function App() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (showSettings) {
-        setShowSettings(false);
-        return true;
-      }
-
       if (canGoBack) {
         webViewRef.current?.goBack();
         return true;
@@ -447,29 +441,30 @@ export default function App() {
     });
 
     return () => subscription.remove();
-  }, [canGoBack, showSettings]);
+  }, [canGoBack]);
 
   useEffect(() => {
     let active = true;
 
-    AsyncStorage.getItem(SERVER_URL_STORAGE_KEY)
-      .then(savedUrl => {
+    loadAppConfig(DEFAULT_SERVER_URL)
+      .then(appConfig => {
         if (!active) {
           return;
         }
 
-        const configuredUrl = normalizeServerUrl(savedUrl) ?? DEFAULT_SERVER_URL;
+        const configuredUrl = normalizeServerUrl(appConfig.serverUrl) ?? DEFAULT_SERVER_URL;
         setServerUrl(configuredUrl);
-        setServerUrlDraft(configuredUrl);
         setCurrentUrl(pendingNotificationUrlRef.current ?? configuredUrl);
         setConfigurationReady(true);
         setIsLoading(true);
+        void appendAppLog('Mobile configuration loaded', { retainLog: appConfig.retainLog });
       })
-      .catch(() => {
+      .catch(error => {
         if (!active) {
           return;
         }
 
+        void appendAppLog('Mobile configuration could not be loaded', { error: String(error) });
         setConfigurationReady(true);
         setIsLoading(true);
       });
@@ -661,11 +656,11 @@ export default function App() {
     registerForPushNotificationsAsync()
       .then(token => {
         setPushToken(token);
-        setFcmStatus(token ? 'FCM token ready; sign in to register' : 'FCM token unavailable');
+        void appendAppLog(token ? 'FCM token ready' : 'FCM token unavailable');
       })
-      .catch(() => {
+      .catch(error => {
         setPushToken(null);
-        setFcmStatus('FCM token unavailable');
+        void appendAppLog('FCM token registration failed', { error: String(error) });
       });
 
     const handleDeepLink = (deepLink: string | null) => {
@@ -759,37 +754,11 @@ export default function App() {
         return;
       }
       if (message.type === 'fcm-registration') {
-        setFcmStatus(
-          message.status === 204
-            ? 'FCM registered'
-            : `FCM registration failed (${message.status ?? 0}); sign in inside the APK`
-        );
+        void appendAppLog('FCM registration response', { status: message.status ?? 0 });
       }
     } catch {
       // Ignore messages that are not diagnostics from our registration script.
     }
-  };
-
-  const saveServerUrl = async () => {
-    const nextServerUrl = normalizeServerUrl(serverUrlDraft);
-    if (!nextServerUrl) {
-      setSettingsMessage('Enter a valid http:// or https:// server URL.');
-      return;
-    }
-
-    try {
-      await AsyncStorage.setItem(SERVER_URL_STORAGE_KEY, nextServerUrl);
-    } catch {
-      setSettingsMessage('The server URL could not be saved on this device.');
-      return;
-    }
-    setServerUrl(nextServerUrl);
-    setServerUrlDraft(nextServerUrl);
-    setCurrentUrl(nextServerUrl);
-    pendingNotificationUrlRef.current = null;
-    setError(null);
-    setSettingsMessage(null);
-    setShowSettings(false);
   };
 
   if (!configurationReady) {
@@ -823,36 +792,6 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <View style={styles.container}>
-        <View style={styles.topBar}>
-          <View style={styles.topBarLeading}>
-            {canGoBack && (
-              <Pressable style={styles.backButton} onPress={() => webViewRef.current?.goBack()}>
-                <Text style={styles.settingsButtonText}>‹ Back</Text>
-              </Pressable>
-            )}
-            <Text style={styles.topBarTitle}>LiveKit Meet</Text>
-          </View>
-          <View style={styles.topBarActions}>
-            {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
-              <Pressable
-                style={styles.microphoneButton}
-                onPress={handleEnableMicrophone}
-                disabled={isRequestingMediaPermissions}
-              >
-                <Text style={styles.settingsButtonText}>
-                  {isRequestingMediaPermissions ? 'Checking mic...' : 'Enable microphone'}
-                </Text>
-              </Pressable>
-            )}
-            <Pressable style={styles.settingsButton} onPress={() => {
-              setServerUrlDraft(serverUrl);
-              setSettingsMessage(null);
-              setShowSettings(true);
-            }}>
-              <Text style={styles.settingsButtonText}>Settings</Text>
-            </Pressable>
-          </View>
-        </View>
         {incomingCall && (
           <View style={styles.incomingCallOverlay}>
             <View style={styles.incomingCallCard}>
@@ -920,12 +859,11 @@ export default function App() {
         onNavigationStateChange={handleNavigation}
         onError={event => {
           setIsLoading(false);
-          setError(event.nativeEvent.description || 'The server could not be reached.');
+          const description = event.nativeEvent.description || 'The server could not be reached.';
+          setError(description);
+          void appendAppLog('WebView failed to load', { error: description });
         }}
           />
-          <View style={styles.pushStatus}>
-            <Text style={styles.pushStatusText}>{fcmStatus}</Text>
-          </View>
           {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
             <Pressable style={styles.microphoneWarning} onPress={handleEnableMicrophone}>
               <Text style={styles.microphoneWarningText}>
@@ -936,43 +874,6 @@ export default function App() {
             </Pressable>
           )}
         </View>
-      {showSettings && (
-        <View style={styles.settingsOverlay}>
-          <View style={styles.settingsCard}>
-            <Text style={styles.settingsTitle}>App settings</Text>
-            <Text style={styles.settingsLabel}>Server base URL</Text>
-            <TextInput
-              value={serverUrlDraft}
-              onChangeText={setServerUrlDraft}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              placeholder="https://192.168.29.214:8443"
-              placeholderTextColor="#7d8aa8"
-              style={styles.settingsInput}
-            />
-            <Text style={styles.settingsHint}>
-              Use the same HTTPS address that is reachable from this phone.
-            </Text>
-            {settingsMessage && <Text style={styles.settingsMessage}>{settingsMessage}</Text>}
-            <View style={styles.settingsActions}>
-              <Pressable
-                style={[styles.actionButton, styles.cancelButton]}
-                onPress={() => {
-                  setServerUrlDraft(serverUrl);
-                  setSettingsMessage(null);
-                  setShowSettings(false);
-                }}
-              >
-                <Text style={styles.actionButtonText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={[styles.actionButton, styles.saveButton]} onPress={saveServerUrl}>
-                <Text style={styles.actionButtonText}>Save & reload</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      )}
       </View>
     </SafeAreaView>
   );
@@ -987,40 +888,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#10182a'
   },
-  topBar: {
-    minHeight: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: '#10182a'
-  },
-  topBarTitle: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700'
-  },
-  topBarLeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  backButton: {
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: 'rgba(16, 24, 42, 0.88)'
-  },
-  topBarActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
   incomingCallOverlay: {
     position: 'absolute',
     zIndex: 20,
-    top: 48,
+    top: 0,
     right: 0,
     bottom: 0,
     left: 0,
@@ -1106,39 +977,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#10182a'
   },
-  pushStatus: {
-    position: 'absolute',
-    zIndex: 2,
-    right: 8,
-    bottom: 8,
-    left: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    backgroundColor: 'rgba(16, 24, 42, 0.82)'
-  },
-  pushStatusText: {
-    color: '#b7c0d8',
-    fontSize: 11,
-    textAlign: 'center'
-  },
-  settingsButton: {
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: 'rgba(16, 24, 42, 0.88)'
-  },
-  microphoneButton: {
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: '#a94b3e'
-  },
   microphoneWarning: {
     position: 'absolute',
     zIndex: 3,
     right: 10,
-    bottom: 46,
+    bottom: 10,
     left: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
@@ -1149,85 +992,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     textAlign: 'center'
-  },
-  settingsButtonText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '600'
-  },
-  settingsOverlay: {
-    position: 'absolute',
-    zIndex: 4,
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    backgroundColor: 'rgba(5, 10, 22, 0.78)'
-  },
-  settingsCard: {
-    width: '100%',
-    maxWidth: 420,
-    padding: 22,
-    borderRadius: 14,
-    backgroundColor: '#1c2940'
-  },
-  settingsTitle: {
-    marginBottom: 20,
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: '700'
-  },
-  settingsLabel: {
-    marginBottom: 8,
-    color: '#e8edf8',
-    fontSize: 14,
-    fontWeight: '600'
-  },
-  settingsInput: {
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: '#53627f',
-    borderRadius: 8,
-    color: '#ffffff',
-    backgroundColor: '#111b2e',
-    fontSize: 15
-  },
-  settingsHint: {
-    marginTop: 8,
-    color: '#aab6cf',
-    fontSize: 12,
-    lineHeight: 17
-  },
-  settingsMessage: {
-    marginTop: 10,
-    color: '#ffb4b4',
-    fontSize: 12
-  },
-  settingsActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 20,
-    gap: 10
-  },
-  actionButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 7
-  },
-  cancelButton: {
-    backgroundColor: '#3a455c'
-  },
-  saveButton: {
-    backgroundColor: '#2e6bea'
-  },
-  actionButtonText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '600'
   },
   centered: {
     flex: 1,
