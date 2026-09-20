@@ -7,6 +7,7 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ICallInvitationService CallInvitationService
 @inject ICallLogService CallLogService
+@inject CallInvitationStatusNotifier InvitationStatusNotifier
 @implements IAsyncDisposable
 
 <PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
@@ -291,6 +292,15 @@ else
         participantName = authState.User.FindFirst("display_name")?.Value?.Trim() ??
                           authState.User.Identity?.Name?.Trim() ??
                           string.Empty;
+
+        if (Guid.TryParse(
+            authState.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            out var currentUserId))
+        {
+            invitationStatusSubscription = InvitationStatusNotifier.Subscribe(
+            currentUserId,
+            OnInvitationStatusChangedAsync);
+        }
 
         if (Guid.TryParse(QueryInvitationId, out var parsedInvitationId))
         {
@@ -601,6 +611,29 @@ else
         await InvokeAsync(StateHasChanged);
     }
 
+    private async Task OnInvitationStatusChangedAsync(CallInvitationStatusUpdate update)
+    {
+        await InvokeAsync(() =>
+        {
+            var invitation = pendingInvitations.FirstOrDefault(
+                candidate => candidate.InvitationId == update.InvitationId);
+            if (invitation is null)
+            {
+                return;
+            }
+
+            pendingInvitations.Remove(invitation);
+            ringStatusMessage = update.Status switch
+            {
+                CallLogStatuses.Answered => $"'{invitation.UserName}' accepted the invitation.",
+                CallLogStatuses.Declined => $"'{invitation.UserName}' declined the invitation.",
+                CallLogStatuses.Cancelled => $"Invitation to '{invitation.UserName}' was cancelled.",
+                _ => $"Invitation to '{invitation.UserName}' is no longer ringing."
+            };
+            StateHasChanged();
+        });
+    }
+
     [JSInvokable]
     public async Task OnRoomConnected(string roomName, string identity)
     {
@@ -662,6 +695,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        invitationStatusSubscription?.Dispose();
         participantLeaveRequested = true;
         await FinalizeParticipantSessionAsync();
         await FinalizeCallLogsAsync();
@@ -682,6 +716,7 @@ else
     private Task? participantFinalizationTask;
     private bool callLogsFinalized;
     private readonly List<PendingInvitation> pendingInvitations = new();
+    private IDisposable? invitationStatusSubscription;
 
     private async Task StartParticipantSessionAsync(string roomName)
     {

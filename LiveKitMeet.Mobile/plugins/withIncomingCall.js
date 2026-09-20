@@ -18,9 +18,9 @@ class IncomingCallModule(reactContext: ReactApplicationContext) : ReactContextBa
   override fun getName(): String = "IncomingCall"
 
   @ReactMethod
-  fun showIncomingCall(callerName: String, roomName: String, roomUrl: String, invitationId: String, declineToken: String) {
+  fun showIncomingCall(callerName: String, roomName: String, roomUrl: String, declineUrl: String, invitationId: String, declineToken: String) {
     Handler(Looper.getMainLooper()).post {
-      IncomingCallNotification.show(reactApplicationContext, callerName, roomName, roomUrl, invitationId, declineToken)
+      IncomingCallNotification.show(reactApplicationContext, callerName, roomName, roomUrl, declineUrl, invitationId, declineToken)
     }
   }
 
@@ -52,6 +52,7 @@ class IncomingCallPackage : ReactPackage {
 import android.app.IntentService
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -63,32 +64,43 @@ class IncomingCallActionService : IntentService("IncomingCallActionService") {
 
     val roomUrl = intent.getStringExtra(IncomingCallNotification.EXTRA_ROOM_URL) ?: return
     val invitationId = intent.getStringExtra(IncomingCallNotification.EXTRA_INVITATION_ID) ?: return
+    val declineUrl = intent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_URL)
     val declineToken = intent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN) ?: return
     if (declineToken.isBlank()) {
       return
     }
 
+    var connection: HttpURLConnection? = null
     try {
-      val roomUri = Uri.parse(roomUrl)
-      val endpoint = Uri.Builder()
-        .scheme(roomUri.scheme)
-        .authority(roomUri.authority)
-        .appendPath("api")
-        .appendPath("call-invitations")
-        .appendPath(invitationId)
-        .appendPath("decline-native")
+      val endpoint = (if (!declineUrl.isNullOrBlank()) {
+        Uri.parse(declineUrl)
+      } else {
+        val roomUri = Uri.parse(roomUrl)
+        Uri.Builder()
+          .scheme(roomUri.scheme)
+          .authority(roomUri.authority)
+          .appendPath("api")
+          .appendPath("call-invitations")
+          .appendPath(invitationId)
+          .appendPath("decline-native")
+          .build()
+      }).buildUpon()
         .appendQueryParameter("token", declineToken)
         .build()
-      val connection = URL(endpoint.toString()).openConnection() as HttpURLConnection
+      connection = URL(endpoint.toString()).openConnection() as HttpURLConnection
       connection.requestMethod = "POST"
       connection.connectTimeout = 5000
       connection.readTimeout = 5000
       connection.doOutput = true
       connection.outputStream.use { }
-      connection.responseCode
-      connection.disconnect()
-    } catch (_: Exception) {
-      // The notification is already dismissed; a later cancellation can still resolve the log.
+      val responseCode = connection.responseCode
+      if (responseCode !in 200..299) {
+        Log.e("IncomingCallAction", "Decline request failed with HTTP $responseCode")
+      }
+    } catch (exception: Exception) {
+      Log.e("IncomingCallAction", "Decline request failed", exception)
+    } finally {
+      connection?.disconnect()
     }
   }
 }
@@ -111,6 +123,7 @@ class IncomingCallFirebaseService : FirebaseMessagingService() {
           payload["callerName"] ?: payload["fromDisplayName"] ?: "Someone",
           payload["roomName"] ?: "LiveKit meeting",
           roomUrl,
+          payload["declineUrl"] ?: "",
           invitationId,
           payload["declineToken"] ?: ""
         )
@@ -141,27 +154,28 @@ object IncomingCallNotification {
   const val EXTRA_CALLER_NAME = "callerName"
   const val EXTRA_ROOM_NAME = "roomName"
   const val EXTRA_ROOM_URL = "roomUrl"
+  const val EXTRA_DECLINE_URL = "declineUrl"
   const val EXTRA_INVITATION_ID = "invitationId"
   const val EXTRA_DECLINE_TOKEN = "declineToken"
   const val EXTRA_NOTIFICATION_ID = "notificationId"
 
   private const val CHANNEL_ID = "incoming-calls-fullscreen-v1"
 
-  fun show(context: Context, callerName: String, roomName: String, roomUrl: String, invitationId: String, declineToken: String) {
+  fun show(context: Context, callerName: String, roomName: String, roomUrl: String, declineUrl: String, invitationId: String, declineToken: String) {
     val notificationId = invitationId.hashCode()
     ensureChannel(context)
 
-    val fullScreenIntent = callIntent(context, callerName, roomName, invitationId, roomUrl, null, declineToken)
+    val fullScreenIntent = callIntent(context, callerName, roomName, invitationId, roomUrl, declineUrl, null, declineToken)
     val fullScreenPendingIntent = pendingActivity(context, notificationId, fullScreenIntent)
     val acceptPendingIntent = pendingActivity(
       context,
       notificationId + 1,
-      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_ACCEPT, declineToken)
+      callIntent(context, callerName, roomName, invitationId, roomUrl, declineUrl, ACTION_ACCEPT, declineToken)
     )
     val declinePendingIntent = pendingActivity(
       context,
       notificationId + 2,
-      callIntent(context, callerName, roomName, invitationId, roomUrl, ACTION_DECLINE, declineToken)
+      callIntent(context, callerName, roomName, invitationId, roomUrl, declineUrl, ACTION_DECLINE, declineToken)
     )
 
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -215,12 +229,13 @@ object IncomingCallNotification {
     manager.createNotificationChannel(channel)
   }
 
-  private fun callIntent(context: Context, callerName: String, roomName: String, invitationId: String, roomUrl: String, action: String?, declineToken: String): Intent =
+  private fun callIntent(context: Context, callerName: String, roomName: String, invitationId: String, roomUrl: String, declineUrl: String, action: String?, declineToken: String): Intent =
     Intent(context, IncomingCallActivity::class.java).apply {
       if (action != null) this.action = action
       putExtra(EXTRA_CALLER_NAME, callerName)
       putExtra(EXTRA_ROOM_NAME, roomName)
       putExtra(EXTRA_ROOM_URL, roomUrl)
+      putExtra(EXTRA_DECLINE_URL, declineUrl)
       putExtra(EXTRA_INVITATION_ID, invitationId)
       putExtra(EXTRA_DECLINE_TOKEN, declineToken)
       putExtra(EXTRA_NOTIFICATION_ID, invitationId.hashCode())
@@ -254,6 +269,7 @@ import android.widget.TextView
 class IncomingCallActivity : Activity() {
   private var invitationId: String = ""
   private var roomUrl: String = ""
+  private var declineUrl: String = ""
   private var declineToken: String = ""
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -289,6 +305,7 @@ class IncomingCallActivity : Activity() {
   private fun handleIntent(incomingIntent: Intent) {
     invitationId = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_INVITATION_ID) ?: ""
     roomUrl = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_ROOM_URL) ?: ""
+    declineUrl = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_URL) ?: ""
     declineToken = incomingIntent.getStringExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN) ?: ""
     when (incomingIntent.action) {
       IncomingCallNotification.ACTION_ACCEPT -> acceptCall()
@@ -359,6 +376,7 @@ class IncomingCallActivity : Activity() {
     startService(Intent(this, IncomingCallActionService::class.java).apply {
       action = IncomingCallNotification.ACTION_DECLINE
       putExtra(IncomingCallNotification.EXTRA_ROOM_URL, roomUrl)
+      putExtra(IncomingCallNotification.EXTRA_DECLINE_URL, declineUrl)
       putExtra(IncomingCallNotification.EXTRA_INVITATION_ID, invitationId)
       putExtra(IncomingCallNotification.EXTRA_DECLINE_TOKEN, declineToken)
     })

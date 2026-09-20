@@ -958,6 +958,8 @@ svg {
     z-index: 20;
     display: flex;
     flex-direction: column;
+    color: #20252b;
+    color-scheme: light;
     animation: slideIn 180ms ease-out;
 }
 
@@ -1167,7 +1169,19 @@ svg {
 .participant-info {
     display: flex;
     align-items: center;
+    flex: 1 1 auto;
     gap: 0.75rem;
+    min-width: 0;
+}
+
+.participant-info > div:last-child {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    gap: 0.15rem;
+    overflow: hidden;
 }
 
 .participant-avatar-small {
@@ -1184,14 +1198,32 @@ svg {
 }
 
 .participant-name {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    color: #20252b !important;
     font-size: 0.9rem;
-    font-weight: 500;
+    font-weight: 600;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+    white-space: nowrap;
 }
 
 .participant-badge-you {
     font-size: 0.75rem;
     color: #9ba1a8;
     margin-left: 0.3rem;
+}
+
+.pending-invitation-item .participant-badge-you {
+    margin-left: 0;
+    padding: 0.12rem 0.35rem;
+    border-radius: 999px;
+    color: #80631d;
+    background: #fff5d6;
+    font-size: 0.65rem;
+    font-weight: 700;
 }
 
 .participant-audio-state {

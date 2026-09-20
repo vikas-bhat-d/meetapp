@@ -86,6 +86,7 @@ builder.Services.AddSingleton<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserAdministrationService, UserAdministrationService>();
 builder.Services.AddSingleton<CallInvitationConnectionTracker>();
+builder.Services.AddSingleton<CallInvitationStatusNotifier>();
 builder.Services.AddScoped<ICallInvitationService, CallInvitationService>();
 builder.Services.AddScoped<ICallLogService, CallLogService>();
 builder.Services.AddScoped<IFirebasePushNotificationService, FirebasePushNotificationService>();

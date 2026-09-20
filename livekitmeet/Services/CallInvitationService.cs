@@ -40,6 +40,7 @@ public sealed class CallInvitationService : ICallInvitationService
     private readonly AppDbContext _db;
     private readonly IHubContext<CallInvitationHub> _hub;
     private readonly CallInvitationConnectionTracker _tracker;
+    private readonly CallInvitationStatusNotifier _statusNotifier;
     private readonly IFirebasePushNotificationService _pushNotifications;
     private readonly ICallLogService _callLogs;
     private readonly string _actionTokenSecret;
@@ -48,6 +49,7 @@ public sealed class CallInvitationService : ICallInvitationService
         AppDbContext db,
         IHubContext<CallInvitationHub> hub,
         CallInvitationConnectionTracker tracker,
+        CallInvitationStatusNotifier statusNotifier,
         IFirebasePushNotificationService pushNotifications,
         ICallLogService callLogs,
         IConfiguration configuration)
@@ -55,6 +57,7 @@ public sealed class CallInvitationService : ICallInvitationService
         _db = db;
         _hub = hub;
         _tracker = tracker;
+        _statusNotifier = statusNotifier;
         _pushNotifications = pushNotifications;
         _callLogs = callLogs;
         _actionTokenSecret = configuration["Auth:JwtSecret"] ?? throw new InvalidOperationException("Auth:JwtSecret must be configured.");
@@ -128,6 +131,7 @@ public sealed class CallInvitationService : ICallInvitationService
             cancellationToken);
 
         var declineToken = CreateDeclineActionToken(invitation.InvitationId, target.Id, invitation.ExpiresAtUtc);
+        var declineUrl = CreateDeclineEndpoint(invitation.RoomUrl, invitation.InvitationId);
 
         var deliveredToTray = _tracker.IsConnected(target.Id);
         if (deliveredToTray)
@@ -147,7 +151,7 @@ public sealed class CallInvitationService : ICallInvitationService
                 ["callUUID"] = invitation.InvitationId.ToString(),
                 ["invitationId"] = invitation.InvitationId.ToString(),
                 ["roomName"] = roomName,
-                ["roomUrl"] = roomUrl,
+                ["roomUrl"] = invitation.RoomUrl,
                 ["fromUserName"] = fromUserName,
                 ["fromDisplayName"] = fromDisplayName,
                 ["callerName"] = fromDisplayName,
@@ -155,7 +159,8 @@ public sealed class CallInvitationService : ICallInvitationService
                 ["hasVideo"] = videoEnabled.ToString().ToLowerInvariant(),
                 ["audioEnabled"] = audioEnabled.ToString().ToLowerInvariant(),
                 ["videoEnabled"] = videoEnabled.ToString().ToLowerInvariant(),
-                ["declineToken"] = declineToken
+                ["declineToken"] = declineToken,
+                ["declineUrl"] = declineUrl
             },
             cancellationToken);
 
@@ -208,6 +213,8 @@ public sealed class CallInvitationService : ICallInvitationService
             .Group(CallInvitationHub.UserGroup(log.RecipientId))
             .SendAsync("CallCancelled", invitationId, cancellationToken);
 
+        await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Cancelled);
+
         await _pushNotifications.SendCancelAsync(log.RecipientId, invitationId, cancellationToken);
         return true;
     }
@@ -232,6 +239,7 @@ public sealed class CallInvitationService : ICallInvitationService
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.CallerId))
             .SendAsync("CallDeclined", invitationId, cancellationToken);
+        await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Declined);
         return true;
     }
 
@@ -247,6 +255,25 @@ public sealed class CallInvitationService : ICallInvitationService
             Encoding.UTF8.GetBytes(_actionTokenSecret),
             Encoding.UTF8.GetBytes(encodedPayload));
         return $"{encodedPayload}.{WebEncoders.Base64UrlEncode(signature)}";
+    }
+
+    private static string CreateDeclineEndpoint(string roomUrl, Guid invitationId)
+    {
+        if (!Uri.TryCreate(roomUrl, UriKind.Absolute, out var roomUri))
+        {
+            throw new InvalidOperationException("The invitation room URL is invalid.");
+        }
+
+        var roomPath = roomUri.AbsolutePath;
+        var roomsMarkerIndex = roomPath.IndexOf("/rooms/", StringComparison.OrdinalIgnoreCase);
+        var applicationPath = roomsMarkerIndex >= 0 ? roomPath[..roomsMarkerIndex] : string.Empty;
+        var builder = new UriBuilder(roomUri)
+        {
+            Path = $"{applicationPath.TrimEnd('/')}/api/call-invitations/{invitationId:D}/decline-native",
+            Query = string.Empty
+        };
+
+        return builder.Uri.AbsoluteUri;
     }
 
     private bool ValidateDeclineActionToken(string actionToken, Guid invitationId, Guid recipientId)

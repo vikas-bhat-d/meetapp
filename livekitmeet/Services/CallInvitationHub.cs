@@ -15,6 +15,77 @@ public sealed record CallInvitationMessage(
     bool VideoEnabled,
     DateTime ExpiresAtUtc);
 
+public sealed record CallInvitationStatusUpdate(Guid InvitationId, string Status);
+
+public sealed class CallInvitationStatusNotifier
+{
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Func<CallInvitationStatusUpdate, Task>>> _subscriptions = new();
+
+    public IDisposable Subscribe(Guid userId, Func<CallInvitationStatusUpdate, Task> handler)
+    {
+        var userSubscriptions = _subscriptions.GetOrAdd(
+            userId,
+            _ => new ConcurrentDictionary<Guid, Func<CallInvitationStatusUpdate, Task>>());
+        var subscriptionId = Guid.NewGuid();
+        userSubscriptions[subscriptionId] = handler;
+        return new Subscription(() => Unsubscribe(userId, subscriptionId));
+    }
+
+    public async Task NotifyAsync(Guid userId, Guid invitationId, string status)
+    {
+        if (!_subscriptions.TryGetValue(userId, out var userSubscriptions))
+        {
+            return;
+        }
+
+        var update = new CallInvitationStatusUpdate(invitationId, status);
+        foreach (var handler in userSubscriptions.Values.ToArray())
+        {
+            try
+            {
+                await handler(update);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private void Unsubscribe(Guid userId, Guid subscriptionId)
+    {
+        if (!_subscriptions.TryGetValue(userId, out var userSubscriptions))
+        {
+            return;
+        }
+
+        userSubscriptions.TryRemove(subscriptionId, out _);
+        if (userSubscriptions.IsEmpty)
+        {
+            _subscriptions.TryRemove(
+                new KeyValuePair<Guid, ConcurrentDictionary<Guid, Func<CallInvitationStatusUpdate, Task>>>(userId, userSubscriptions));
+        }
+    }
+
+    private sealed class Subscription : IDisposable
+    {
+        private readonly Action _dispose;
+        private int _disposed;
+
+        public Subscription(Action dispose)
+        {
+            _dispose = dispose;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _dispose();
+            }
+        }
+    }
+}
+
 public sealed class CallInvitationConnectionTracker
 {
     private readonly ConcurrentDictionary<Guid, int> _connections = new();

@@ -28,7 +28,7 @@ const INCOMING_CALL_CATEGORY = 'INCOMING_CALL';
 const INCOMING_CALL_CHANNEL = 'incoming-calls-v2';
 
 type IncomingCallNativeModule = {
-  showIncomingCall: (callerName: string, roomName: string, roomUrl: string, invitationId: string, declineToken: string) => void;
+  showIncomingCall: (callerName: string, roomName: string, roomUrl: string, declineUrl: string, invitationId: string, declineToken: string) => void;
   dismissIncomingCall: (invitationId: string) => void;
 };
 
@@ -36,6 +36,7 @@ const incomingCallNativeModule = NativeModules.IncomingCall as IncomingCallNativ
 
 type PushData = {
   roomUrl?: string;
+  declineUrl?: string;
   roomName?: string;
   invitationId?: string;
   callUUID?: string;
@@ -123,6 +124,7 @@ TaskManager.defineTask<Notifications.NotificationTaskPayload>(BACKGROUND_NOTIFIC
         callerName,
         roomName,
         roomUrl,
+        (payload.declineUrl as string | undefined) ?? '',
         notificationId,
         (payload.declineToken as string | undefined) ?? ''
       );

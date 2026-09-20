@@ -120,11 +120,16 @@ public sealed class CallLogService : ICallLogService
 {
     private readonly AppDbContext _db;
     private readonly IHubContext<CallInvitationHub> _hub;
+    private readonly CallInvitationStatusNotifier _statusNotifier;
 
-    public CallLogService(AppDbContext db, IHubContext<CallInvitationHub> hub)
+    public CallLogService(
+        AppDbContext db,
+        IHubContext<CallInvitationHub> hub,
+        CallInvitationStatusNotifier statusNotifier)
     {
         _db = db;
         _hub = hub;
+        _statusNotifier = statusNotifier;
     }
 
     public async Task<CallLog> CreateAsync(
@@ -279,6 +284,10 @@ public sealed class CallLogService : ICallLogService
         log.Status = CallLogStatuses.Answered;
         log.AnsweredAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
+        await _hub.Clients
+            .Group(CallInvitationHub.UserGroup(log.CallerId))
+            .SendAsync("CallAnswered", invitationId, cancellationToken);
+        await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Answered);
         return true;
     }
 
@@ -306,6 +315,7 @@ public sealed class CallLogService : ICallLogService
         await _hub.Clients
             .Group(CallInvitationHub.UserGroup(log.CallerId))
             .SendAsync("CallDeclined", invitationId, cancellationToken);
+        await _statusNotifier.NotifyAsync(log.CallerId, invitationId, CallLogStatuses.Declined);
         return true;
     }
 
