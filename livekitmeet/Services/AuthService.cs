@@ -24,6 +24,7 @@ public interface IAuthService
 {
     Task<AuthenticationResult> LoginAsync(string userName, string password, CancellationToken cancellationToken = default);
     Task<AuthenticationResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default);
+    Task<AuthenticationResult> IssueTrayTokensAsync(string refreshToken, CancellationToken cancellationToken = default);
     Task<bool> ValidateAccessTokenAsync(string accessToken, ClaimsPrincipal principal, CancellationToken cancellationToken = default);
     Task RevokeAsync(string? accessToken, string? refreshToken, CancellationToken cancellationToken = default);
     Task<(bool Success, string? Error)> ChangePasswordAsync(
@@ -115,6 +116,31 @@ public sealed class AuthService : IAuthService
         }
 
         session.RevokedAtUtc = DateTime.UtcNow;
+        var tokens = CreateTokens(session.User);
+        _db.AuthSessions.Add(tokens.Session);
+        await _db.SaveChangesAsync(cancellationToken);
+        return new AuthenticationResult(true, null, tokens.Issued);
+    }
+
+    public async Task<AuthenticationResult> IssueTrayTokensAsync(
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return AuthenticationResult.Failed("Refresh token is missing.");
+        }
+
+        var tokenHash = HashToken(refreshToken);
+        var session = await _db.AuthSessions
+            .Include(candidate => candidate.User)
+            .SingleOrDefaultAsync(candidate => candidate.RefreshTokenHash == tokenHash, cancellationToken);
+
+        if (session is null || !IsSessionRefreshable(session))
+        {
+            return AuthenticationResult.Failed("Refresh token is invalid or expired.");
+        }
+
         var tokens = CreateTokens(session.User);
         _db.AuthSessions.Add(tokens.Session);
         await _db.SaveChangesAsync(cancellationToken);

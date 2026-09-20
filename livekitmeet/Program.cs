@@ -276,6 +276,23 @@ app.MapPost("/api/auth/token/refresh", async (AuthTokenRefreshRequest request, I
     return Results.Ok(result.Tokens);
 }).AllowAnonymous();
 
+app.MapPost("/api/auth/token/tray", async (HttpContext context, IAuthService authService) =>
+{
+    var refreshToken = context.Request.Cookies[AuthService.RefreshTokenCookieName];
+    if (string.IsNullOrWhiteSpace(refreshToken))
+    {
+        return Results.Unauthorized();
+    }
+
+    var result = await authService.IssueTrayTokensAsync(refreshToken, context.RequestAborted);
+    if (!result.Success || result.Tokens is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    return Results.Ok(result.Tokens);
+}).AllowAnonymous();
+
 app.MapPost("/api/auth/logout", async (HttpContext context, IAuthService authService) =>
 {
     await authService.RevokeAsync(

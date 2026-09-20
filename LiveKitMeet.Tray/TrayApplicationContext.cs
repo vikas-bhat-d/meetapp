@@ -1,149 +1,333 @@
-using System.Diagnostics;
 using System.Media;
+using System.Security.Cryptography;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
+using H.NotifyIcon;
 
 namespace LiveKitMeet.Tray;
 
-public sealed class TrayApplicationContext : ApplicationContext
+public sealed class TrayApplicationContext : IDisposable
 {
-    private readonly NotifyIcon _notifyIcon;
-    private readonly ToolStripMenuItem _statusItem;
-    private readonly ToolStripMenuItem _openMeetItem;
-    private readonly ToolStripMenuItem _signInItem;
-    private readonly ToolStripMenuItem _signOutItem;
+    private readonly TaskbarIcon _taskbarIcon;
+    private readonly MenuItem _statusItem;
+    private readonly MenuItem _signInItem;
+    private readonly MenuItem _signOutItem;
     private readonly TraySettings _settings;
     private readonly AuthClient _authClient = new();
-    private readonly SynchronizationContext _uiContext;
-    private readonly Dictionary<Guid, IncomingCallForm> _incomingCallForms = new();
+    private readonly Dispatcher _dispatcher;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly SemaphoreSlim _webSessionLock = new(1, 1);
+    private readonly Dictionary<Guid, IncomingCallWindow> _incomingCallWindows = new();
     private SignalRInvitationClient? _invitationClient;
+    private MeetWindow? _meetWindow;
+    private string? _webSessionFingerprint;
+    private Task? _savedSessionTask;
+    private Task? _webSessionTask;
+    private bool _exitStarted;
+    private bool _disposed;
 
     public TrayApplicationContext()
     {
-        _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _dispatcher = Dispatcher.CurrentDispatcher;
         _settings = TraySettings.Load();
 
-        _statusItem = new ToolStripMenuItem("Not connected") { Enabled = false };
-        _openMeetItem = new ToolStripMenuItem("Open Meet", null, (_, _) => ShowMeetBrowser());
-        _signInItem = new ToolStripMenuItem("Sign in...", null, (_, _) => ShowLogin());
-        _signOutItem = new ToolStripMenuItem("Sign out", null, (_, _) => SignOut()) { Enabled = false };
-        var exitItem = new ToolStripMenuItem("Exit", null, (_, _) => ExitThread());
+        _statusItem = new MenuItem { Header = "Not connected", IsEnabled = false };
+        var openMeetItem = new MenuItem { Header = "Open Meet" };
+        openMeetItem.Click += (_, _) => ShowLogin();
+        _signInItem = new MenuItem { Header = "Sign in..." };
+        _signInItem.Click += (_, _) => ShowLogin();
+        _signOutItem = new MenuItem { Header = "Sign out", IsEnabled = false };
+        _signOutItem.Click += (_, _) => _ = SignOutAsync();
+        var exitItem = new MenuItem { Header = "Exit" };
+        exitItem.Click += (_, _) => _ = ExitAsync();
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenu();
         menu.Items.Add(_statusItem);
-        menu.Items.Add(_openMeetItem);
-        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(openMeetItem);
+        menu.Items.Add(new Separator());
         menu.Items.Add(_signInItem);
         menu.Items.Add(_signOutItem);
-        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 
-        _notifyIcon = new NotifyIcon
+        _taskbarIcon = new TaskbarIcon
         {
-            Icon = SystemIcons.Application,
-            Text = "LiveKit Meet",
-            ContextMenuStrip = menu,
-            Visible = true
+            IconSource = CreateTrayIcon(),
+            Visibility = System.Windows.Visibility.Visible,
+            ToolTipText = "LiveKit Meet - Not connected",
+            ContextMenu = menu
         };
-        _notifyIcon.DoubleClick += (_, _) => ShowMeetBrowser();
+        _taskbarIcon.TrayMouseDoubleClick += (_, _) => ShowLogin();
+        _taskbarIcon.ForceCreate(enablesEfficiencyMode: false);
+        TrayDiagnosticLog.Write(
+            $"Tray icon created isCreated={_taskbarIcon.TrayIcon.IsCreated} visibility={_taskbarIcon.TrayIcon.Visibility}");
 
-        if (!string.IsNullOrWhiteSpace(_settings.GetRefreshToken()))
+        if (string.IsNullOrWhiteSpace(_settings.GetRefreshToken()))
         {
-            _ = ConnectSavedSessionAsync();
+            SetStatus("Sign in required", false);
+        }
+        else
+        {
+            _savedSessionTask = ConnectSavedSessionAsync();
         }
     }
 
     private void ShowLogin()
     {
-        using var form = new LoginForm(_authClient, _settings.ServerUrl);
-        if (form.ShowDialog() != DialogResult.OK || form.Tokens is null)
+        if (_exitStarted)
         {
             return;
         }
 
-        _settings.ServerUrl = form.ServerUrl;
-        _settings.SetRefreshToken(form.Tokens.RefreshToken);
-        _settings.Save();
-        _ = ConnectAsync(form.Tokens);
+        ShowMeetWindow(_settings.ServerUrl);
     }
 
-    private async Task ConnectSavedSessionAsync()
+    private MeetWindow EnsureMeetWindow()
     {
+        if (_meetWindow is not null)
+        {
+            return _meetWindow;
+        }
+
+        _meetWindow = new MeetWindow(_settings.ServerUrl);
+        _meetWindow.WebSessionChanged += HandleWebSessionChanged;
+        _meetWindow.Closed += (_, _) => _meetWindow = null;
+        return _meetWindow;
+    }
+
+    private void ShowMeetWindow(string url)
+    {
+        var window = EnsureMeetWindow();
+        if (!window.IsVisible)
+        {
+            window.Show();
+        }
+
+        window.NavigateTo(url);
+        window.Activate();
+    }
+
+    private void HandleWebSessionChanged(object? sender, WebSessionChangedEventArgs args)
+    {
+        if (_exitStarted)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(args.RefreshToken))
+        {
+            if (_invitationClient is null && !_exitStarted)
+            {
+                _webSessionFingerprint = null;
+                SetSignInState(false);
+                SetStatus("Sign in required", false);
+            }
+
+            return;
+        }
+
+        _webSessionTask = ConnectWebSessionAsync(args.RefreshToken);
+    }
+
+    private async Task ConnectWebSessionAsync(string refreshToken)
+    {
+        var lockHeld = false;
         try
         {
-            var refreshToken = _settings.GetRefreshToken();
-            if (string.IsNullOrWhiteSpace(refreshToken))
+            await _webSessionLock.WaitAsync(_lifetimeCts.Token).ConfigureAwait(false);
+            lockHeld = true;
+            var fingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken)));
+            if (string.Equals(fingerprint, _webSessionFingerprint, StringComparison.Ordinal))
             {
                 return;
             }
 
-            var tokens = await _authClient.RefreshAsync(_settings.ServerUrl, refreshToken);
-            _settings.SetRefreshToken(tokens.RefreshToken);
-            _settings.Save();
-            await ConnectAsync(tokens);
+            var retryCount = 0;
+            while (!_lifetimeCts.IsCancellationRequested)
+            {
+                try
+                {
+                    SetStatus("Signing in...", false);
+                    var tokens = await _authClient.ExchangeWebSessionAsync(
+                        _settings.ServerUrl,
+                        refreshToken,
+                        _lifetimeCts.Token).ConfigureAwait(false);
+                    _settings.SetRefreshToken(tokens.RefreshToken);
+                    _settings.Save();
+                    _webSessionFingerprint = fingerprint;
+                    await ConnectAsync(tokens).ConfigureAwait(false);
+                    return;
+                }
+                catch (AuthRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    SetSignInState(false);
+                    SetStatus("Sign in required", false);
+                    return;
+                }
+                catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    retryCount++;
+                    TrayDiagnosticLog.Write($"Web session exchange failed attempt={retryCount} error={ex.Message}");
+                    SetStatus("Waiting for server...", false);
+                    if (!await WaitForRetryAsync(retryCount).ConfigureAwait(false))
+                    {
+                        return;
+                    }
+                }
+            }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
         {
-            _settings.SetRefreshToken(null);
-            _settings.Save();
-            SetStatus($"Sign in required: {ShortError(ex.Message)}", false);
+        }
+        finally
+        {
+            if (lockHeld)
+            {
+                _webSessionLock.Release();
+            }
+        }
+    }
+
+    private async Task ConnectSavedSessionAsync()
+    {
+        var retryCount = 0;
+        while (!_lifetimeCts.IsCancellationRequested)
+        {
+            try
+            {
+                var refreshToken = _settings.GetRefreshToken();
+                if (string.IsNullOrWhiteSpace(refreshToken))
+                {
+                    SetSignInState(false);
+                    return;
+                }
+
+                var tokens = await _authClient.RefreshAsync(
+                    _settings.ServerUrl,
+                    refreshToken,
+                    _lifetimeCts.Token).ConfigureAwait(false);
+                _settings.SetRefreshToken(tokens.RefreshToken);
+                _settings.Save();
+                await ConnectAsync(tokens).ConfigureAwait(false);
+                return;
+            }
+            catch (AuthRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _settings.SetRefreshToken(null);
+                _settings.Save();
+                SetSignInState(false);
+                SetStatus("Sign in required", false);
+                return;
+            }
+            catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                retryCount++;
+                TrayDiagnosticLog.Write($"Saved session refresh failed attempt={retryCount} error={ex.Message}");
+                SetSignInState(true);
+                SetStatus("Waiting for server...", false);
+                if (!await WaitForRetryAsync(retryCount).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
         }
     }
 
     private async Task ConnectAsync(AuthTokenResponse tokens)
     {
-        await DisconnectAsync();
+        await DisconnectAsync().ConfigureAwait(false);
+        if (_lifetimeCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var client = new SignalRInvitationClient(
+            _authClient,
+            _settings.ServerUrl,
+            tokens,
+            HandleInvitationAsync,
+            HandleInvitationClosed,
+            status => SetStatus(status, status is "Connected"),
+            refreshToken =>
+            {
+                _settings.SetRefreshToken(refreshToken);
+                _settings.Save();
+            });
+        _invitationClient = client;
+        SetSignInState(true);
+        var connectionStarted = false;
+
         try
         {
-            _invitationClient = new SignalRInvitationClient(
-                _authClient,
-                _settings.ServerUrl,
-                tokens,
-                HandleInvitationAsync,
-                HandleInvitationClosed,
-                status => SetStatus(status, status is "Connected"),
-                refreshToken =>
-                {
-                    _settings.SetRefreshToken(refreshToken);
-                    _settings.Save();
-                });
-            await _invitationClient.StartAsync();
+            await client.StartAsync(_lifetimeCts.Token).ConfigureAwait(false);
+            connectionStarted = true;
             SetStatus("Connected", true);
-            SetSignInState(true);
+        }
+        catch (AuthRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _settings.SetRefreshToken(null);
+            _settings.Save();
+            SetSignInState(false);
+            SetStatus("Sign in required", false);
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            await DisconnectAsync();
-            SetStatus($"Connection failed: {ShortError(ex.Message)}", false);
+            TrayDiagnosticLog.Write($"SignalR connection failed error={ex.Message}");
+            SetStatus("Connection failed", false);
+        }
+        finally
+        {
+            if (!connectionStarted && ReferenceEquals(_invitationClient, client))
+            {
+                Interlocked.CompareExchange(ref _invitationClient, null, client);
+                await client.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
     private Task HandleInvitationAsync(CallInvitationMessage invitation)
     {
-        if (invitation.ExpiresAtUtc <= DateTime.UtcNow)
+        if (invitation.ExpiresAtUtc <= DateTime.UtcNow || _exitStarted)
         {
             return Task.CompletedTask;
         }
 
-        _uiContext.Post(_ => ShowIncomingCall(invitation), null);
+        _dispatcher.BeginInvoke(new Action(() => _ = ShowIncomingCallAsync(invitation)));
         return Task.CompletedTask;
     }
 
-    private async void ShowIncomingCall(CallInvitationMessage invitation)
+    private async Task ShowIncomingCallAsync(CallInvitationMessage invitation)
     {
         TrayDiagnosticLog.Write($"Incoming invitation shown invitation={invitation.InvitationId:D} room={invitation.RoomName}");
         SystemSounds.Exclamation.Play();
-        _notifyIcon.ShowBalloonTip(3000, "Incoming LiveKit call", $"{invitation.FromDisplayName} is calling you.", ToolTipIcon.Info);
 
-        using var form = new IncomingCallForm(invitation);
-        _incomingCallForms[invitation.InvitationId] = form;
+        var window = new IncomingCallWindow(invitation);
+        _incomingCallWindows[invitation.InvitationId] = window;
         try
         {
-            if (form.ShowDialog() == DialogResult.OK)
+            var accepted = window.ShowDialog() == true;
+            if (accepted)
             {
                 TrayDiagnosticLog.Write($"Accept selected invitation={invitation.InvitationId:D}");
                 if (await ReportCallOutcomeAsync(invitation, "accept"))
                 {
                     TrayDiagnosticLog.Write($"Accept succeeded; opening room invitation={invitation.InvitationId:D} url={invitation.RoomUrl}");
-                    OpenRoomUrl(invitation.RoomUrl);
+                    ShowMeetWindow(invitation.RoomUrl);
                 }
                 else
                 {
@@ -151,11 +335,11 @@ public sealed class TrayApplicationContext : ApplicationContext
                     MessageBox.Show(
                         "This invitation is no longer available.",
                         "LiveKit Meet",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
                 }
             }
-            else if (!form.ClosedByRemoteStatus)
+            else if (!window.ClosedByRemoteStatus)
             {
                 TrayDiagnosticLog.Write($"Decline selected invitation={invitation.InvitationId:D}");
                 await ReportCallOutcomeAsync(invitation, "decline");
@@ -163,19 +347,24 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
         finally
         {
-            _incomingCallForms.Remove(invitation.InvitationId);
+            _incomingCallWindows.Remove(invitation.InvitationId);
         }
     }
 
     private void HandleInvitationClosed(Guid invitationId, string status)
     {
-        _uiContext.Post(_ =>
+        if (_exitStarted)
         {
-            if (_incomingCallForms.TryGetValue(invitationId, out var form) && !form.IsDisposed)
+            return;
+        }
+
+        _dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_incomingCallWindows.TryGetValue(invitationId, out var window) && window.IsVisible)
             {
-                form.CloseByRemoteStatus();
+                window.CloseByRemoteStatus();
             }
-        }, null);
+        }));
     }
 
     private async Task<bool> ReportCallOutcomeAsync(CallInvitationMessage invitation, string outcome)
@@ -184,102 +373,205 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             if (_invitationClient is not null)
             {
-                return await _invitationClient.ReportCallOutcomeAsync(invitation.InvitationId, outcome);
+                return await _invitationClient.ReportCallOutcomeAsync(invitation.InvitationId, outcome)
+                    .ConfigureAwait(false);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            TrayDiagnosticLog.Write($"Outcome request threw invitation={invitation.InvitationId:D} outcome={outcome}");
+            TrayDiagnosticLog.Write($"Outcome request threw invitation={invitation.InvitationId:D} outcome={outcome} error={ex.Message}");
         }
 
         return false;
     }
 
-    private void OpenRoomUrl(string roomUrl)
+    private async Task SignOutAsync()
     {
-        if (!Uri.TryCreate(roomUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        if (_exitStarted)
         {
-            TrayDiagnosticLog.Write($"Room URL rejected url={roomUrl}");
-            MessageBox.Show("The invitation URL is invalid.", "LiveKit Meet", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        TrayDiagnosticLog.Write($"Launching room URL url={uri}");
-        OpenInBrowser(uri.ToString());
-    }
-
-    private void ShowMeetBrowser()
-    {
-        OpenInBrowser(_settings.ServerUrl);
-    }
-
-    private static void OpenInBrowser(string url)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            TrayDiagnosticLog.Write($"Room URL launch failed url={url} error={ex.Message}");
-            MessageBox.Show(
-                $"The meeting page could not be opened.\r\n\r\n{ex.Message}",
-                "LiveKit Meet",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
-    }
-
-    private void SignOut()
-    {
-        _ = SignOutAsync();
-    }
-
-    private async Task SignOutAsync()
-    {
         await DisconnectAsync();
         _settings.SetRefreshToken(null);
         _settings.Save();
+        _webSessionFingerprint = null;
         SetSignInState(false);
         SetStatus("Not connected", false);
+        if (_meetWindow is not null)
+        {
+            await _meetWindow.ClearSessionAsync();
+        }
     }
 
     private async Task DisconnectAsync()
     {
-        if (_invitationClient is not null)
+        var client = Interlocked.Exchange(ref _invitationClient, null);
+        if (client is not null)
         {
-            await _invitationClient.DisposeAsync();
-            _invitationClient = null;
+            await client.DisposeAsync().ConfigureAwait(false);
         }
     }
 
     private void SetStatus(string status, bool connected)
     {
-        _uiContext.Post(_ =>
+        if (_exitStarted)
         {
-            _statusItem.Text = status;
-            _notifyIcon.Text = status.Length > 63 ? status[..63] : $"LiveKit Meet - {status}";
-            _signOutItem.Enabled = connected;
-        }, null);
+            return;
+        }
+
+        void Update()
+        {
+            if (_exitStarted)
+            {
+                return;
+            }
+
+            _statusItem.Header = status;
+            _taskbarIcon.ToolTipText = $"LiveKit Meet - {status}";
+            if (connected)
+            {
+                _signOutItem.IsEnabled = true;
+            }
+        }
+
+        if (_dispatcher.CheckAccess())
+        {
+            Update();
+        }
+        else
+        {
+            _dispatcher.BeginInvoke(Update);
+        }
     }
 
     private void SetSignInState(bool signedIn)
     {
-        _uiContext.Post(_ =>
+        if (_exitStarted)
         {
-            _signInItem.Enabled = !signedIn;
-            _signOutItem.Enabled = signedIn;
-        }, null);
+            return;
+        }
+
+        void Update()
+        {
+            if (_exitStarted)
+            {
+                return;
+            }
+
+            _signInItem.IsEnabled = !signedIn;
+            _signOutItem.IsEnabled = signedIn;
+        }
+
+        if (_dispatcher.CheckAccess())
+        {
+            Update();
+        }
+        else
+        {
+            _dispatcher.BeginInvoke(Update);
+        }
     }
 
-    private static string ShortError(string message) => message.Length > 80 ? message[..80] : message;
-
-    protected override void ExitThreadCore()
+    private async Task ExitAsync()
     {
-        _notifyIcon.Visible = false;
-        _notifyIcon.Dispose();
-        _invitationClient?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        if (_exitStarted)
+        {
+            return;
+        }
+
+        _exitStarted = true;
+        _taskbarIcon.Visibility = Visibility.Hidden;
+        _lifetimeCts.Cancel();
+        foreach (var window in _incomingCallWindows.Values.ToArray())
+        {
+            window.CloseForApplicationExit();
+        }
+
+        _meetWindow?.CloseForApplicationExit();
+        try
+        {
+            await DisconnectAsync();
+        }
+        catch (Exception ex)
+        {
+            TrayDiagnosticLog.Write($"Shutdown connection disposal failed error={ex.Message}");
+        }
+
+        var backgroundTasks = new[] { _savedSessionTask, _webSessionTask }
+            .Where(task => task is not null)
+            .Cast<Task>()
+            .ToArray();
+        if (backgroundTasks.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(backgroundTasks);
+            }
+            catch (Exception ex)
+            {
+                TrayDiagnosticLog.Write($"Shutdown background task failed error={ex.Message}");
+            }
+        }
+
         _authClient.Dispose();
-        base.ExitThreadCore();
+        _webSessionLock.Dispose();
+        _taskbarIcon.Dispose();
+        _lifetimeCts.Dispose();
+        Application.Current.Shutdown();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (!_exitStarted)
+        {
+            _lifetimeCts.Cancel();
+            _taskbarIcon.Dispose();
+            _authClient.Dispose();
+            _webSessionLock.Dispose();
+            _lifetimeCts.Dispose();
+        }
+    }
+
+    private static GeneratedIconSource CreateTrayIcon()
+    {
+        return new GeneratedIconSource
+        {
+            Text = "W",
+            Size = 64,
+            Foreground = Brushes.White,
+            Background = Brushes.DodgerBlue,
+            BorderBrush = Brushes.Black,
+            BorderThickness = 1,
+            CornerRadius = new CornerRadius(12)
+        };
+    }
+
+    private static TimeSpan GetRetryDelay(int retryCount) => retryCount switch
+    {
+        1 => TimeSpan.Zero,
+        2 => TimeSpan.FromSeconds(2),
+        3 => TimeSpan.FromSeconds(5),
+        4 => TimeSpan.FromSeconds(10),
+        _ => TimeSpan.FromSeconds(30)
+    };
+
+    private async Task<bool> WaitForRetryAsync(int retryCount)
+    {
+        try
+        {
+            await Task.Delay(GetRetryDelay(retryCount), _lifetimeCts.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 }

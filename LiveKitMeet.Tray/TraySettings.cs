@@ -1,3 +1,4 @@
+using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -10,7 +11,7 @@ public sealed class TraySettings
         "LiveKitMeet");
     private static readonly string SettingsPath = Path.Combine(SettingsDirectory, "tray-settings.json");
 
-    public string ServerUrl { get; set; } = "http://localhost:5189";
+    public string ServerUrl { get; set; } = "https://192.168.29.214:8443";
     public string? ProtectedRefreshToken { get; set; }
 
     public static TraySettings Load()

@@ -1,9 +1,23 @@
+using System.Net;
+using System.Net.Http;
 using System.Net.Http.Json;
 
 namespace LiveKitMeet.Tray;
 
+public sealed class AuthRequestException : InvalidOperationException
+{
+    public AuthRequestException(HttpStatusCode statusCode, string message)
+        : base(message)
+    {
+        StatusCode = statusCode;
+    }
+
+    public HttpStatusCode StatusCode { get; }
+}
+
 public sealed class AuthClient : IDisposable
 {
+    private const string RefreshTokenCookieName = "livekit_refresh_token";
     private readonly HttpClient _httpClient = new();
 
     public async Task<AuthTokenResponse> LoginAsync(
@@ -35,6 +49,29 @@ public sealed class AuthClient : IDisposable
         await EnsureSuccessAsync(response);
         return await response.Content.ReadFromJsonAsync<AuthTokenResponse>(cancellationToken: cancellationToken)
                ?? throw new InvalidOperationException("The server returned an empty refresh response.");
+    }
+
+    public async Task<AuthTokenResponse> ExchangeWebSessionAsync(
+        string serverUrl,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            throw new InvalidOperationException("The web session does not contain a refresh token.");
+        }
+
+        var baseUrl = NormalizeServerUrl(serverUrl);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl}/api/auth/token/tray");
+        request.Headers.TryAddWithoutValidation(
+            "Cookie",
+            $"{RefreshTokenCookieName}={refreshToken}");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        await EnsureSuccessAsync(response);
+        return await response.Content.ReadFromJsonAsync<AuthTokenResponse>(cancellationToken: cancellationToken)
+               ?? throw new InvalidOperationException("The server returned an empty web-session response.");
     }
 
     public async Task<bool> ReportCallOutcomeAsync(
@@ -74,7 +111,8 @@ public sealed class AuthClient : IDisposable
         }
 
         var message = await response.Content.ReadAsStringAsync();
-        throw new InvalidOperationException(
+        throw new AuthRequestException(
+            response.StatusCode,
             string.IsNullOrWhiteSpace(message)
                 ? $"The server returned HTTP {(int)response.StatusCode}."
                 : message);

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR.Client;
+using System.Net;
 
 namespace LiveKitMeet.Tray;
 
@@ -12,6 +13,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
     private readonly Action<string> _onStatusChanged;
     private readonly Action<string> _onRefreshTokenChanged;
     private readonly SemaphoreSlim _tokenLock = new(1, 1);
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private HubConnection? _connection;
     private string _accessToken;
     private DateTime _accessTokenExpiresAtUtc;
@@ -39,18 +41,17 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetimeCts.Token);
+        var retryCount = 0;
+
         _connection = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/call-invitations", options =>
             {
                 options.AccessTokenProvider = GetAccessTokenAsync;
             })
-            .WithAutomaticReconnect(new[]
-            {
-                TimeSpan.Zero,
-                TimeSpan.FromSeconds(2),
-                TimeSpan.FromSeconds(10),
-                TimeSpan.FromSeconds(30)
-            })
+            .WithAutomaticReconnect(new InfiniteRetryPolicy())
             .Build();
 
         _connection.On<CallInvitationMessage>("IncomingCall", invitation =>
@@ -73,13 +74,39 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
         };
         _connection.Closed += error =>
         {
-            _onStatusChanged(error is null ? "Disconnected" : "Connection error");
+            if (!_disposed)
+            {
+                _onStatusChanged(error is null ? "Disconnected" : "Connection error");
+            }
+
             return Task.CompletedTask;
         };
 
-        _onStatusChanged("Connecting...");
-        await _connection.StartAsync(cancellationToken);
-        _onStatusChanged("Connected");
+        while (!_disposed && !linkedCancellation.IsCancellationRequested)
+        {
+            try
+            {
+                _onStatusChanged("Connecting...");
+                await _connection.StartAsync(linkedCancellation.Token).ConfigureAwait(false);
+                _onStatusChanged("Connected");
+                return;
+            }
+            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (AuthRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                TrayDiagnosticLog.Write($"SignalR start failed attempt={retryCount + 1} error={ex.Message}");
+                retryCount++;
+                _onStatusChanged("Waiting for server...");
+                await Task.Delay(GetInitialRetryDelay(retryCount), linkedCancellation.Token).ConfigureAwait(false);
+            }
+        }
     }
 
     private async Task<string?> GetAccessTokenAsync()
@@ -89,7 +116,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
             return null;
         }
 
-        await _tokenLock.WaitAsync();
+        await _tokenLock.WaitAsync(_lifetimeCts.Token).ConfigureAwait(false);
         try
         {
             if (_accessTokenExpiresAtUtc > DateTime.UtcNow.AddMinutes(1))
@@ -97,7 +124,8 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
                 return _accessToken;
             }
 
-            var refreshed = await _authClient.RefreshAsync(_serverUrl, _refreshToken);
+            var refreshed = await _authClient.RefreshAsync(_serverUrl, _refreshToken, _lifetimeCts.Token)
+                .ConfigureAwait(false);
             _accessToken = refreshed.AccessToken;
             _accessTokenExpiresAtUtc = refreshed.AccessTokenExpiresAtUtc;
             _refreshToken = refreshed.RefreshToken;
@@ -112,7 +140,7 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
 
     public async Task<bool> ReportCallOutcomeAsync(Guid invitationId, string outcome)
     {
-        var accessToken = await GetAccessTokenAsync();
+        var accessToken = await GetAccessTokenAsync().ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(accessToken))
         {
             return false;
@@ -122,17 +150,52 @@ public sealed class SignalRInvitationClient : IAsyncDisposable
             _serverUrl,
             accessToken,
             invitationId,
-            outcome);
+            outcome,
+            _lifetimeCts.Token).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
     {
-        _disposed = true;
-        if (_connection is not null)
+        if (_disposed)
         {
-            await _connection.DisposeAsync();
+            return;
         }
 
+        _disposed = true;
+        _lifetimeCts.Cancel();
+        if (_connection is not null)
+        {
+            try
+            {
+                await _connection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        _lifetimeCts.Dispose();
         _tokenLock.Dispose();
+    }
+
+    private static TimeSpan GetInitialRetryDelay(int retryCount) => retryCount switch
+    {
+        1 => TimeSpan.Zero,
+        2 => TimeSpan.FromSeconds(2),
+        3 => TimeSpan.FromSeconds(5),
+        4 => TimeSpan.FromSeconds(10),
+        _ => TimeSpan.FromSeconds(30)
+    };
+
+    private sealed class InfiniteRetryPolicy : IRetryPolicy
+    {
+        public TimeSpan? NextRetryDelay(RetryContext retryContext) => retryContext.PreviousRetryCount switch
+        {
+            0 => TimeSpan.Zero,
+            1 => TimeSpan.FromSeconds(2),
+            2 => TimeSpan.FromSeconds(10),
+            3 => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromSeconds(60)
+        };
     }
 }
