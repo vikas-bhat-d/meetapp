@@ -603,7 +603,7 @@ The device routes are:
 - Physical device: use the host's LAN IP and ensure Windows Firewall allows the port.
 - Caddy HTTPS: install/trust the Caddy local root CA on the device and use the Caddy host name/IP.
 - Direct HTTP: confirm the development build has cleartext traffic enabled and that the URL uses `http://`.
-- Recheck the runtime `config.json` server URL in the Android app-private document directory and restart the app after changing it.
+- Recheck the runtime `config.json` server URL in the selected folder's `wincalldata` directory and restart the app after changing it.
 
 ### EAS reports a missing Firebase file
 

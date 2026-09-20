@@ -63,11 +63,13 @@ For a physical device, change `expo.extra.serverUrl` in `app.json` to the comput
 
 ## File configuration and logs
 
-On first launch, the native wrapper creates `config.json` in its app-private document directory. On Android the usual location is:
+On the first Android launch, the native wrapper opens Android's system folder picker. Android may not allow the `Internal storage` root to be selected, so select any folder inside it and grant access. The app creates a visible `wincalldata` directory inside the selected folder and stores its files there. For example, if you select `Download`:
 
 ```text
-/data/user/0/com.livekitmeet.mobile/files/config.json
+/storage/emulated/0/Download/wincalldata/config.json
 ```
+
+If you select a different folder, look for `wincalldata` inside that exact folder. The selected directory URI is kept in app-private storage so access can be restored on later launches. Android's modern scoped-storage rules do not allow the app to request unrestricted access to all shared storage; the system folder picker grants access only to the selected directory. Existing `.wincalldata` directories from an older build are migrated to visible `wincalldata` automatically.
 
 The repository includes `config.json.example` with the supported shape:
 
@@ -80,14 +82,15 @@ The repository includes `config.json.example` with the supported shape:
 
 `serverUrl` is read when the app starts. `retainLog` accepts `0` through `3`: `0` disables file logging and removes stored log files, while `1`, `2`, and `3` retain that many calendar days including today. Logs are written beside the config file as `logs/YYYY-MM-DD.log`.
 
-The directory is private to the app and is not normally visible in a phone file manager. For a debug build, Android Studio Device File Explorer or these commands can inspect it:
+If the picker is cancelled, the app falls back to its private app directory for that run. The shared folder is requested again on a later fresh launch. For a debug build, the shared files can be inspected with:
 
 ```powershell
-adb shell run-as com.livekitmeet.mobile cat files/config.json
-adb shell run-as com.livekitmeet.mobile ls files/logs
+adb shell ls -la /sdcard/Download/wincalldata
+adb shell cat /sdcard/Download/wincalldata/config.json
+adb shell ls -la /sdcard/Download/wincalldata/logs
 ```
 
-Replace the private `config.json` with the example or another valid JSON file, then restart the app. If the file is missing or invalid, the app recreates it from `EXPO_PUBLIC_SERVER_URL` or the `expo.extra.serverUrl` fallback.
+Replace the shared `config.json` with the example or another valid JSON file, then fully close and reopen the app. If the file is missing or invalid, the app recreates it from `EXPO_PUBLIC_SERVER_URL` or the `expo.extra.serverUrl` fallback. Camera and microphone prompts are shown one at a time before notification permission, and the WebView is recreated after returning from the background so a stale Blazor connection does not remain on screen.
 
 ## Build an APK
 

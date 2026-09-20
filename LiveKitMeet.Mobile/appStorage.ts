@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 export type MobileAppConfig = {
   serverUrl: string;
@@ -6,19 +7,31 @@ export type MobileAppConfig = {
 };
 
 const DEFAULT_RETAIN_LOG_DAYS = 3;
+const APP_DATA_DIRECTORY_NAME = 'wincalldata';
+const LEGACY_APP_DATA_DIRECTORY_NAME = '.wincalldata';
 const CONFIG_FILE_NAME = 'config.json';
 const LOG_DIRECTORY_NAME = 'logs';
+const STORAGE_LOCATION_FILE_NAME = 'storage-location.json';
 
 let activeConfig: MobileAppConfig | null = null;
+let activeDataDirectory: Directory | null = null;
 let configuredRetainLog: number | null = null;
 let logQueue: Promise<void> = Promise.resolve();
 
+function getStorageLocationFile(): File {
+  return new File(Paths.document, STORAGE_LOCATION_FILE_NAME);
+}
+
+function getDataDirectory(): Directory {
+  return activeDataDirectory ?? Paths.document;
+}
+
 function getConfigFile(): File {
-  return new File(Paths.document, CONFIG_FILE_NAME);
+  return new File(getDataDirectory(), CONFIG_FILE_NAME);
 }
 
 function getLogDirectory(): Directory {
-  return new Directory(Paths.document, LOG_DIRECTORY_NAME);
+  return new Directory(getDataDirectory(), LOG_DIRECTORY_NAME);
 }
 
 function getLogFile(dateKey: string): File {
@@ -31,6 +44,102 @@ function writeFile(file: File, content: string): void {
   }
 
   file.write(content);
+}
+
+async function readStoredDataDirectory(): Promise<Directory | null> {
+  try {
+    const value = await getStorageLocationFile().text();
+    const parsed = JSON.parse(value) as { directoryUri?: unknown };
+    if (typeof parsed.directoryUri !== 'string' || parsed.directoryUri.trim().length === 0) {
+      return null;
+    }
+
+    const directory = new Directory(parsed.directoryUri);
+    return directory.exists ? directory : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberDataDirectory(directory: Directory): void {
+  try {
+    writeFile(
+      getStorageLocationFile(),
+      `${JSON.stringify({ directoryUri: directory.uri }, null, 2)}\n`
+    );
+  } catch {
+    // The app can use the selected directory for this run even if the pointer cannot be saved.
+  }
+}
+
+async function migrateLegacyDataDirectory(directory: Directory): Promise<Directory> {
+  if (directory.name !== LEGACY_APP_DATA_DIRECTORY_NAME) {
+    return directory;
+  }
+
+  const visibleDirectory = new Directory(directory.parentDirectory, APP_DATA_DIRECTORY_NAME);
+  try {
+    visibleDirectory.create({ idempotent: true });
+
+    const legacyConfig = new File(directory, CONFIG_FILE_NAME);
+    const visibleConfig = new File(visibleDirectory, CONFIG_FILE_NAME);
+    if (legacyConfig.exists && !visibleConfig.exists) {
+      writeFile(visibleConfig, await legacyConfig.text());
+    }
+
+    const legacyLogs = new Directory(directory, LOG_DIRECTORY_NAME);
+    if (legacyLogs.exists) {
+      const visibleLogs = new Directory(visibleDirectory, LOG_DIRECTORY_NAME);
+      visibleLogs.create({ idempotent: true });
+      for (const entry of legacyLogs.list()) {
+        if (!(entry instanceof File) || !entry.name.endsWith('.log')) {
+          continue;
+        }
+
+        const visibleLog = new File(visibleLogs, entry.name);
+        if (!visibleLog.exists) {
+          writeFile(visibleLog, await entry.text());
+        }
+      }
+    }
+
+    rememberDataDirectory(visibleDirectory);
+    return visibleDirectory;
+  } catch {
+    return directory;
+  }
+}
+
+async function resolveDataDirectory(promptForPermission: boolean): Promise<Directory> {
+  if (activeDataDirectory) {
+    return activeDataDirectory;
+  }
+
+  const storedDirectory = await readStoredDataDirectory();
+  if (storedDirectory) {
+    activeDataDirectory = await migrateLegacyDataDirectory(storedDirectory);
+    return activeDataDirectory;
+  }
+
+  if (Platform.OS === 'android' && promptForPermission) {
+    try {
+      const selectedDirectory = new Directory((await Directory.pickDirectoryAsync()).uri);
+      const dataDirectory = selectedDirectory.name === LEGACY_APP_DATA_DIRECTORY_NAME
+        ? await migrateLegacyDataDirectory(selectedDirectory)
+        : selectedDirectory.name === APP_DATA_DIRECTORY_NAME
+          ? selectedDirectory
+          : new Directory(selectedDirectory, APP_DATA_DIRECTORY_NAME);
+      dataDirectory.create({ idempotent: true });
+      activeDataDirectory = dataDirectory;
+      rememberDataDirectory(dataDirectory);
+      return dataDirectory;
+    } catch {
+      // Use app-private storage when the user cancels or the provider rejects the folder.
+    }
+  }
+
+  activeDataDirectory = Paths.document;
+  return activeDataDirectory;
 }
 
 function normalizeRetainLog(value: unknown): number {
@@ -99,6 +208,8 @@ async function readConfiguredRetainLog(): Promise<number> {
     return configuredRetainLog;
   }
 
+  await resolveDataDirectory(false);
+
   try {
     const value = await getConfigFile().text();
     const parsed = JSON.parse(value) as { retainLog?: unknown };
@@ -114,6 +225,8 @@ export async function loadAppConfig(defaultServerUrl: string): Promise<MobileApp
   if (activeConfig) {
     return activeConfig;
   }
+
+  await resolveDataDirectory(true);
 
   let config: MobileAppConfig;
   let shouldCreateConfig = false;

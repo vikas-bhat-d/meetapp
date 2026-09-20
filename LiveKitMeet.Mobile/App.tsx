@@ -305,24 +305,41 @@ async function requestMediaPermissionsAsync(): Promise<MediaPermissionResult> {
     return { camera: 'granted', microphone: 'granted' };
   }
 
-  // Request these one at a time. Android can drop one of two simultaneous
-  // permission dialogs, which leaves WebView with camera but not microphone.
-  const cameraResult = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.CAMERA,
-    {
-      title: 'Camera permission',
-      message: 'LiveKit Meet needs camera access for video meetings.',
-      buttonPositive: 'Allow'
-    }
-  );
-  const microphoneResult = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-    {
-      title: 'Microphone permission',
-      message: 'LiveKit Meet needs microphone access so other participants can hear you.',
-      buttonPositive: 'Allow'
-    }
-  );
+  let cameraResult = PermissionsAndroid.RESULTS.DENIED;
+  try {
+    const alreadyGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
+    cameraResult = alreadyGranted
+      ? PermissionsAndroid.RESULTS.GRANTED
+      : await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: 'Camera permission',
+            message: 'LiveKit Meet needs camera access for video meetings.',
+            buttonPositive: 'Allow'
+          }
+        );
+  } catch {
+    cameraResult = PermissionsAndroid.RESULTS.DENIED;
+  }
+
+  await new Promise<void>(resolve => setTimeout(resolve, 350));
+
+  let microphoneResult = PermissionsAndroid.RESULTS.DENIED;
+  try {
+    const alreadyGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    microphoneResult = alreadyGranted
+      ? PermissionsAndroid.RESULTS.GRANTED
+      : await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone permission',
+            message: 'LiveKit Meet needs microphone access so other participants can hear you.',
+            buttonPositive: 'Allow'
+          }
+        );
+  } catch {
+    microphoneResult = PermissionsAndroid.RESULTS.DENIED;
+  }
 
   return {
     camera: toMediaPermissionStatus(cameraResult),
@@ -336,6 +353,11 @@ async function requestMicrophonePermissionAsync(): Promise<MediaPermissionStatus
   }
 
   try {
+    const alreadyGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    if (alreadyGranted) {
+      return 'granted';
+    }
+
     const result = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       {
@@ -355,10 +377,13 @@ export default function App() {
   const hasLoadedDocumentRef = useRef(false);
   const loadFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNotificationUrlRef = useRef<string | null>(null);
+  const appStateRef = useRef(AppState.currentState);
+  const reloadOnResumeRef = useRef(false);
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [configurationReady, setConfigurationReady] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [currentUrl, setCurrentUrl] = useState(DEFAULT_SERVER_URL);
+  const [webViewKey, setWebViewKey] = useState(0);
   const [pushToken, setPushToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -407,11 +432,42 @@ export default function App() {
     }
   }, []);
 
+  const reloadWebView = useCallback((reason: string) => {
+    hasLoadedDocumentRef.current = false;
+    setCanGoBack(false);
+    setError(null);
+    setIsLoading(true);
+    setWebViewKey(previousKey => previousKey + 1);
+    void appendAppLog('WebView reloaded', { reason });
+  }, []);
+
   useEffect(() => {
-    if (Platform.OS === 'android') {
+    const subscription = AppState.addEventListener('change', nextState => {
+      const previousState = appStateRef.current;
+      if (nextState === 'background') {
+        reloadOnResumeRef.current = true;
+        webViewRef.current?.stopLoading();
+      } else if (
+        nextState === 'active' &&
+        previousState === 'background' &&
+        reloadOnResumeRef.current &&
+        configurationReady
+      ) {
+        reloadOnResumeRef.current = false;
+        reloadWebView('App resumed after background');
+      }
+
+      appStateRef.current = nextState;
+    });
+
+    return () => subscription.remove();
+  }, [configurationReady, reloadWebView]);
+
+  useEffect(() => {
+    if (Platform.OS === 'android' && configurationReady) {
       requestMediaAccess().catch(() => undefined);
     }
-  }, [requestMediaAccess]);
+  }, [configurationReady, requestMediaAccess]);
 
   useEffect(() => {
     if (!microphoneError || mediaPermissions.microphone !== 'granted') {
@@ -653,15 +709,35 @@ export default function App() {
   }, [openNotificationRoom, reportCallOutcome, stopIncomingRing]);
 
   useEffect(() => {
+    if (!configurationReady || !mediaPermissionsChecked) {
+      return;
+    }
+
+    let active = true;
     registerForPushNotificationsAsync()
       .then(token => {
+        if (!active) {
+          return;
+        }
+
         setPushToken(token);
         void appendAppLog(token ? 'FCM token ready' : 'FCM token unavailable');
       })
       .catch(error => {
+        if (!active) {
+          return;
+        }
+
         setPushToken(null);
         void appendAppLog('FCM token registration failed', { error: String(error) });
       });
+
+    return () => {
+      active = false;
+    };
+  }, [configurationReady, mediaPermissionsChecked]);
+
+  useEffect(() => {
 
     const handleDeepLink = (deepLink: string | null) => {
       if (!deepLink) return;
@@ -821,6 +897,7 @@ export default function App() {
           <WebView
         style={styles.webView}
         ref={webViewRef}
+        key={webViewKey}
         source={{ uri: currentUrl }}
         javaScriptEnabled
         domStorageEnabled
