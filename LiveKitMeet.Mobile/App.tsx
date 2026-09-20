@@ -392,7 +392,6 @@ export default function App() {
     microphone: Platform.OS === 'android' ? 'denied' : 'granted'
   });
   const [mediaPermissionsChecked, setMediaPermissionsChecked] = useState(Platform.OS !== 'android');
-  const [isRequestingMediaPermissions, setIsRequestingMediaPermissions] = useState(false);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const incomingCallRef = useRef<IncomingCall | null>(null);
@@ -400,7 +399,6 @@ export default function App() {
   const pendingCallOutcomeRef = useRef<{ invitationId: string; outcome: 'accept' | 'decline' | 'end' } | null>(null);
 
   const requestMediaAccess = useCallback(async (): Promise<MediaPermissionResult> => {
-    setIsRequestingMediaPermissions(true);
     try {
       const result = await requestMediaPermissionsAsync();
       setMediaPermissions(result);
@@ -411,7 +409,6 @@ export default function App() {
       return result;
     } finally {
       setMediaPermissionsChecked(true);
-      setIsRequestingMediaPermissions(false);
     }
   }, []);
 
@@ -846,15 +843,6 @@ export default function App() {
     );
   }
 
-  if (!mediaPermissionsChecked) {
-    return (
-      <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
-        <ActivityIndicator size="large" color="#6f8cff" />
-        <Text style={styles.errorText}>Requesting camera and microphone permission...</Text>
-      </SafeAreaView>
-    );
-  }
-
   if (error) {
     return (
       <SafeAreaView style={styles.centered} edges={['top', 'bottom']}>
@@ -941,7 +929,7 @@ export default function App() {
           void appendAppLog('WebView failed to load', { error: description });
         }}
           />
-          {(mediaPermissions.microphone !== 'granted' || microphoneError) && (
+          {mediaPermissionsChecked && (mediaPermissions.microphone !== 'granted' || microphoneError) && (
             <Pressable style={styles.microphoneWarning} onPress={handleEnableMicrophone}>
               <Text style={styles.microphoneWarningText}>
                 {microphoneError

@@ -11,6 +11,7 @@ const APP_DATA_DIRECTORY_NAME = 'wincalldata';
 const LEGACY_APP_DATA_DIRECTORY_NAME = '.wincalldata';
 const CONFIG_FILE_NAME = 'config.json';
 const LOG_DIRECTORY_NAME = 'logs';
+const LOG_FILE_MIME_TYPE = 'application/octet-stream';
 const STORAGE_LOCATION_FILE_NAME = 'storage-location.json';
 
 let activeConfig: MobileAppConfig | null = null;
@@ -27,15 +28,16 @@ function getDataDirectory(): Directory {
 }
 
 function getConfigFile(): File {
-  return new File(getDataDirectory(), CONFIG_FILE_NAME);
+  return findFileChild(getDataDirectory(), CONFIG_FILE_NAME) ?? new File(getDataDirectory(), CONFIG_FILE_NAME);
 }
 
 function getLogDirectory(): Directory {
-  return new Directory(getDataDirectory(), LOG_DIRECTORY_NAME);
+  return findDirectoryChild(getDataDirectory(), LOG_DIRECTORY_NAME) ?? new Directory(getDataDirectory(), LOG_DIRECTORY_NAME);
 }
 
 function getLogFile(dateKey: string): File {
-  return new File(getLogDirectory(), `${dateKey}.log`);
+  const logDirectory = getLogDirectory();
+  return findFileChild(logDirectory, `${dateKey}.log`) ?? new File(logDirectory, `${dateKey}.log`);
 }
 
 function writeFile(file: File, content: string): void {
@@ -44,6 +46,66 @@ function writeFile(file: File, content: string): void {
   }
 
   file.write(content);
+}
+
+function findFileChild(directory: Directory, fileName: string): File | null {
+  try {
+    const entry = directory.list().find(item => item instanceof File && item.name === fileName);
+    return entry instanceof File ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+function findDirectoryChild(directory: Directory, directoryName: string): Directory | null {
+  try {
+    const entry = directory.list().find(item => item instanceof Directory && item.name === directoryName);
+    return entry instanceof Directory ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+function createDirectory(parent: Directory, directoryName: string): Directory {
+  const existing = findDirectoryChild(parent, directoryName);
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    return parent.createDirectory(directoryName);
+  } catch {
+    const directory = new Directory(parent, directoryName);
+    directory.create({ idempotent: true });
+    return directory;
+  }
+}
+
+function createFile(parent: Directory, fileName: string, mimeType: string): File {
+  const existing = findFileChild(parent, fileName);
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    return parent.createFile(fileName, mimeType);
+  } catch {
+    const file = new File(parent, fileName);
+    file.create({ intermediates: true });
+    return file;
+  }
+}
+
+function createConfigFile(): File {
+  return createFile(getDataDirectory(), CONFIG_FILE_NAME, 'application/json');
+}
+
+function createLogDirectory(): Directory {
+  return createDirectory(getDataDirectory(), LOG_DIRECTORY_NAME);
+}
+
+function createLogFile(dateKey: string): File {
+  return createFile(createLogDirectory(), `${dateKey}.log`, LOG_FILE_MIME_TYPE);
 }
 
 async function readStoredDataDirectory(): Promise<Directory | null> {
@@ -77,28 +139,25 @@ async function migrateLegacyDataDirectory(directory: Directory): Promise<Directo
     return directory;
   }
 
-  const visibleDirectory = new Directory(directory.parentDirectory, APP_DATA_DIRECTORY_NAME);
   try {
-    visibleDirectory.create({ idempotent: true });
+    const visibleDirectory = createDirectory(directory.parentDirectory, APP_DATA_DIRECTORY_NAME);
 
-    const legacyConfig = new File(directory, CONFIG_FILE_NAME);
-    const visibleConfig = new File(visibleDirectory, CONFIG_FILE_NAME);
-    if (legacyConfig.exists && !visibleConfig.exists) {
-      writeFile(visibleConfig, await legacyConfig.text());
+    const legacyConfig = findFileChild(directory, CONFIG_FILE_NAME);
+    const visibleConfig = findFileChild(visibleDirectory, CONFIG_FILE_NAME);
+    if (legacyConfig && !visibleConfig) {
+      writeFile(createFile(visibleDirectory, CONFIG_FILE_NAME, 'application/json'), await legacyConfig.text());
     }
 
-    const legacyLogs = new Directory(directory, LOG_DIRECTORY_NAME);
-    if (legacyLogs.exists) {
-      const visibleLogs = new Directory(visibleDirectory, LOG_DIRECTORY_NAME);
-      visibleLogs.create({ idempotent: true });
+    const legacyLogs = findDirectoryChild(directory, LOG_DIRECTORY_NAME);
+    if (legacyLogs) {
+      const visibleLogs = createDirectory(visibleDirectory, LOG_DIRECTORY_NAME);
       for (const entry of legacyLogs.list()) {
         if (!(entry instanceof File) || !entry.name.endsWith('.log')) {
           continue;
         }
 
-        const visibleLog = new File(visibleLogs, entry.name);
-        if (!visibleLog.exists) {
-          writeFile(visibleLog, await entry.text());
+        if (!findFileChild(visibleLogs, entry.name)) {
+          writeFile(createFile(visibleLogs, entry.name, LOG_FILE_MIME_TYPE), await entry.text());
         }
       }
     }
@@ -124,12 +183,20 @@ async function resolveDataDirectory(promptForPermission: boolean): Promise<Direc
   if (Platform.OS === 'android' && promptForPermission) {
     try {
       const selectedDirectory = new Directory((await Directory.pickDirectoryAsync()).uri);
-      const dataDirectory = selectedDirectory.name === LEGACY_APP_DATA_DIRECTORY_NAME
-        ? await migrateLegacyDataDirectory(selectedDirectory)
-        : selectedDirectory.name === APP_DATA_DIRECTORY_NAME
-          ? selectedDirectory
-          : new Directory(selectedDirectory, APP_DATA_DIRECTORY_NAME);
-      dataDirectory.create({ idempotent: true });
+      let dataDirectory: Directory;
+      if (selectedDirectory.name === LEGACY_APP_DATA_DIRECTORY_NAME) {
+        dataDirectory = await migrateLegacyDataDirectory(selectedDirectory);
+      } else if (selectedDirectory.name === APP_DATA_DIRECTORY_NAME) {
+        dataDirectory = selectedDirectory;
+      } else {
+        try {
+          dataDirectory = createDirectory(selectedDirectory, APP_DATA_DIRECTORY_NAME);
+        } catch {
+          // Some document providers allow files in the selected folder but reject child folders.
+          dataDirectory = selectedDirectory;
+        }
+      }
+
       activeDataDirectory = dataDirectory;
       rememberDataDirectory(dataDirectory);
       return dataDirectory;
@@ -246,7 +313,7 @@ export async function loadAppConfig(defaultServerUrl: string): Promise<MobileApp
 
   if (shouldCreateConfig) {
     try {
-      writeFile(getConfigFile(), `${JSON.stringify(config, null, 2)}\n`);
+      writeFile(createConfigFile(), `${JSON.stringify(config, null, 2)}\n`);
     } catch {
       // The in-memory defaults still let the app start when storage is unavailable.
     }
@@ -263,10 +330,7 @@ export async function appendAppLog(message: string, details?: Record<string, unk
       return;
     }
 
-    const logDirectory = getLogDirectory();
-    logDirectory.create({ intermediates: true, idempotent: true });
-
-    const logFile = getLogFile(getDateKey(new Date()));
+    const logFile = createLogFile(getDateKey(new Date()));
     let existingContent = '';
     try {
       existingContent = await logFile.text();
