@@ -70,6 +70,7 @@ public sealed class TrayApplicationContext : IDisposable
         if (string.IsNullOrWhiteSpace(_settings.GetRefreshToken()))
         {
             SetStatus("Sign in required", false);
+            ShowLogin();
         }
         else
         {

@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>assets\tray-icon.ico</ApplicationIcon>
-    <AssemblyName>LiveKitMeet.Tray</AssemblyName>
+    <AssemblyName>WinCall</AssemblyName>
     <RootNamespace>LiveKitMeet.Tray</RootNamespace>
   </PropertyGroup>
 
