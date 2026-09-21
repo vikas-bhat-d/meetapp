@@ -424,8 +424,12 @@ The web publish output still needs its runtime configuration, database, LiveKit 
 ```powershell
 Set-Location .\LiveKitMeet.Mobile
 npm ci
-npx expo run:android --variant release
+npx expo prebuild --platform android --clean
+Set-Location .\android
+.\gradlew.bat assembleRelease
 ```
+
+The release APK is written to `android/app/build/outputs/apk/release/app-release.apk`.
 
 The generated native Android project is ignored by the mobile Git rules. The custom Expo plugins regenerate their Android changes during prebuild/build.
 

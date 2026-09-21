@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -33,6 +34,7 @@ public sealed class MeetWindow : Window
         _pendingUrl = _serverUrl;
 
         Title = "LiveKit Meet";
+        Icon = new BitmapImage(new Uri("pack://application:,,,/assets/tray-icon.ico", UriKind.Absolute));
         Width = 1200;
         Height = 800;
         MinWidth = 760;

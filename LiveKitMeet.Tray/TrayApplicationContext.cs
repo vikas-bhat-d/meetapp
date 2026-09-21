@@ -3,6 +3,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using H.NotifyIcon;
 
@@ -554,18 +555,9 @@ public sealed class TrayApplicationContext : IDisposable
         }
     }
 
-    private static GeneratedIconSource CreateTrayIcon()
+    private static ImageSource CreateTrayIcon()
     {
-        return new GeneratedIconSource
-        {
-            Text = "W",
-            Size = 64,
-            Foreground = Brushes.White,
-            Background = Brushes.DodgerBlue,
-            BorderBrush = Brushes.Black,
-            BorderThickness = 1,
-            CornerRadius = new CornerRadius(12)
-        };
+        return new BitmapImage(new Uri("pack://application:,,,/assets/tray-icon.ico", UriKind.Absolute));
     }
 
     private static TimeSpan GetRetryDelay(int retryCount) => retryCount switch

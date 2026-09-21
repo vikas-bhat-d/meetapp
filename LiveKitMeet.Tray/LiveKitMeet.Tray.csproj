@@ -7,11 +7,13 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>assets\tray-icon.ico</ApplicationIcon>
     <AssemblyName>LiveKitMeet.Tray</AssemblyName>
     <RootNamespace>LiveKitMeet.Tray</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="assets\tray-icon.ico" />
     <None Update="ringtone\ringtone.mp3">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
