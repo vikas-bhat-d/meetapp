@@ -21,45 +21,102 @@ The web server owns authentication, users, call invitations, Firebase push deliv
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Browser["Browser / Blazor UI"]
-    Android["Android app\nExpo React Native + WebView"]
-    Tray["Windows tray client\nWinForms + SignalR"]
-    Wrapper["Legacy WebView2 wrapper"]
+flowchart TB
 
-    subgraph Edge["Optional local edge"]
-        Caddy["Caddy HTTPS :8443\n/ -> ASP.NET :5189\n/livekit -> LiveKit :7880"]
+    %% =====================================================
+    %% CLIENT APPLICATIONS
+    %% =====================================================
+
+    subgraph CLIENTS["Client Applications"]
+
+        subgraph DESKTOP["Desktop Application"]
+            WPF["WPF Wrapper"]
+            WV_DESKTOP["WebView"]
+            WPF --> WV_DESKTOP
+        end
+
+        subgraph MOBILE["Mobile Application"]
+            ANDROID["Android Wrapper"]
+            WV_MOBILE["WebView"]
+            ANDROID --> WV_MOBILE
+        end
+
     end
 
-    subgraph App["livekitmeet ASP.NET Core .NET 8"]
-        UI["Razor components\nInteractive Server"]
-        API["Minimal APIs\nauth, devices, connection details"]
-        Hub["SignalR hub\n/hubs/call-invitations"]
-        Services["Auth, invitations, Firebase,\nLiveKit token services"]
-        Data["EF Core AppDbContext\nSQLite or SQL Server"]
-    end
 
-    LiveKit["LiveKit server / SFU\nWebSocket and media :7880"]
-    Firebase["Firebase Cloud Messaging"]
+    %% =====================================================
+    %% BLAZOR CLIENT
+    %% =====================================================
 
-    Browser -->|HTTP and Blazor SignalR| Caddy
-    Android -->|HTTPS WebView and FCM token registration| Caddy
-    Tray -->|REST login and SignalR| Caddy
-    Wrapper -->|WebView2 HTTP(S)| Caddy
+    WEB["Blazor Client"]
 
-    Caddy --> UI
-    Caddy --> API
-    Caddy --> Hub
-    Caddy -->|WebSocket /livekit| LiveKit
+    WV_DESKTOP -->|"Loads"| WEB
+    WV_MOBILE -->|"Loads"| WEB
 
-    UI --> API
-    UI --> Hub
-    API --> Services
-    Hub --> Services
-    Services --> Data
-    Services -->|Create signed access token| LiveKit
-    Services -->|Send incoming-call push| Firebase
-    Firebase -->|FCM notification| Android
+
+    %% =====================================================
+    %% REVERSE PROXY + SERVER
+    %% =====================================================
+
+    NGINX["Nginx<br/>HTTPS Reverse Proxy"]
+
+    BACKEND["Blazor Server"]
+
+    WEB -->|"HTTPS / REST API"| NGINX
+    WEB -->|"WebSocket / SignalR"| NGINX
+
+    NGINX -->|"Reverse Proxy"| BACKEND
+
+
+    %% =====================================================
+    %% DATABASE
+    %% =====================================================
+
+    DB[("Database")]
+
+    BACKEND -->|"Read / Write"| DB
+
+
+    %% =====================================================
+    %% LIVEKIT / WEBRTC
+    %% =====================================================
+
+    SFU["LiveKit SFU"]
+
+    BACKEND -->|"Room / Access Token"| SFU
+
+    WEB -->|"WebRTC / WSS<br/>Real-time Media"| SFU
+
+
+    %% =====================================================
+    %% PUSH NOTIFICATIONS
+    %% =====================================================
+
+    FCM["FCM<br/>Push Notification Service"]
+
+    BACKEND -->|"Push Notification"| FCM
+    FCM -->|"Notification"| ANDROID
+
+
+    %% =====================================================
+    %% STYLING
+    %% =====================================================
+
+    classDef native fill:#e8f1ff,stroke:#2563eb,stroke-width:2px;
+    classDef web fill:#e8fff0,stroke:#16a34a,stroke-width:2px;
+    classDef proxy fill:#fff7ed,stroke:#f97316,stroke-width:2px;
+    classDef backend fill:#fff4e5,stroke:#ea580c,stroke-width:2px;
+    classDef media fill:#f3e8ff,stroke:#9333ea,stroke-width:2px;
+    classDef db fill:#fce7f3,stroke:#db2777,stroke-width:2px;
+    classDef service fill:#eef2ff,stroke:#4f46e5,stroke-width:2px;
+
+    class WPF,ANDROID native;
+    class WV_DESKTOP,WV_MOBILE,WEB web;
+    class NGINX proxy;
+    class BACKEND backend;
+    class SFU media;
+    class DB db;
+    class FCM service;
 ```
 
 The direct-development topology can omit Caddy. In that case, clients use the ASP.NET URL directly and the LiveKit URL must be reachable directly. The supplied Caddy configuration is the intended LAN topology when Android needs a single HTTPS origin and a WebSocket route for LiveKit.
