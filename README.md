@@ -28,52 +28,41 @@ flowchart TB
     %% =====================================================
 
     subgraph CLIENTS["Client Applications"]
-
         subgraph DESKTOP["Desktop Application"]
             WPF["WPF Wrapper"]
             WV_DESKTOP["WebView"]
             WPF --> WV_DESKTOP
         end
-
         subgraph MOBILE["Mobile Application"]
             ANDROID["Android Wrapper"]
             WV_MOBILE["WebView"]
             ANDROID --> WV_MOBILE
         end
-
     end
-
 
     %% =====================================================
     %% BLAZOR CLIENT
     %% =====================================================
 
     WEB["Blazor Client"]
-
     WV_DESKTOP -->|"Loads"| WEB
     WV_MOBILE -->|"Loads"| WEB
-
 
     %% =====================================================
     %% REVERSE PROXY + SERVER
     %% =====================================================
 
     NGINX["Nginx<br/>HTTPS Reverse Proxy"]
-
     BACKEND["Blazor Server"]
-
     WEB -->|"HTTPS / REST API"| NGINX
     WEB -->|"WebSocket / SignalR"| NGINX
-
     NGINX -->|"Reverse Proxy"| BACKEND
-
 
     %% =====================================================
     %% DATABASE
     %% =====================================================
 
     DB[("Database")]
-
     BACKEND -->|"Read / Write"| DB
 
 
@@ -82,9 +71,7 @@ flowchart TB
     %% =====================================================
 
     SFU["LiveKit SFU"]
-
     BACKEND -->|"Room / Access Token"| SFU
-
     WEB -->|"WebRTC / WSS<br/>Real-time Media"| SFU
 
 
@@ -93,7 +80,6 @@ flowchart TB
     %% =====================================================
 
     FCM["FCM<br/>Push Notification Service"]
-
     BACKEND -->|"Push Notification"| FCM
     FCM -->|"Notification"| ANDROID
 
