@@ -11,7 +11,7 @@ public sealed class TraySettings
         "LiveKitMeet");
     private static readonly string SettingsPath = Path.Combine(SettingsDirectory, "tray-settings.json");
 
-    public string ServerUrl { get; set; } = "https://192.168.29.214:8443";
+    public string ServerUrl { get; set; } = "https://192.168.1.6:8443";
     public string? ProtectedRefreshToken { get; set; }
     public string RingtonePath { get; set; } = "./ringtone.mp3";
     public string? AcceptSoundPath { get; set; }

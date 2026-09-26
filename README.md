@@ -237,7 +237,7 @@ dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "Admin:Displa
 dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "Admin:Password" "replace-with-a-development-password"
 dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "LiveKit:ApiKey" "devkey"
 dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "LiveKit:ApiSecret" "replace-with-the-livekit-secret"
-dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "LiveKit:Url" "wss://192.168.29.214:8443/livekit"
+dotnet user-secrets --project .\livekitmeet\livekitmeet.csproj set "LiveKit:Url" "wss://192.168.1.6:8443/livekit"
 ```
 
 For a local SQL Server instance:
@@ -259,10 +259,10 @@ Do not paste the output of that command into an issue or commit it.
 
 ### LiveKit URL and Caddy routing
 
-The supplied `infra/local/Caddyfile` currently uses `192.168.29.214` and listens on `8443`:
+The supplied `infra/local/Caddyfile` currently uses `192.168.1.6` and listens on `8443`:
 
 ```text
-https://192.168.29.214:8443 {
+https://192.168.1.6:8443 {
     /           -> ASP.NET Core at 127.0.0.1:5189
     /livekit/*  -> LiveKit at 127.0.0.1:7880
 }
@@ -395,7 +395,7 @@ Use this when the phone must reach the app over HTTPS or when the browser and Li
 caddy run --config .\infra\local\Caddyfile
 ```
 
-With the checked-in host value, the public application URL is `https://192.168.29.214:8443`. Update the Caddyfile, `LiveKit:Url`, and mobile server URL together when the host changes.
+With the checked-in host value, the public application URL is `https://192.168.1.6:8443`. Update the Caddyfile, `LiveKit:Url`, and mobile server URL together when the host changes.
 
 ### 5. Verify the browser client
 
@@ -547,7 +547,7 @@ npx eas-cli@latest env:set --name EXPO_PUBLIC_SERVER_URL --value https://meet.ex
 npx eas-cli@latest env:set --name EXPO_PUBLIC_SERVER_URL --value https://meet.example.com --environment production --visibility plaintext --scope project
 ```
 
-`EXPO_PUBLIC_SERVER_URL` is intentionally public application configuration. It is embedded in the client and must not contain credentials. If it is not set, the app falls back to `expo.extra.serverUrl` in `app.json`, currently `https://192.168.29.214:8443`.
+`EXPO_PUBLIC_SERVER_URL` is intentionally public application configuration. It is embedded in the client and must not contain credentials. If it is not set, the app falls back to `expo.extra.serverUrl` in `app.json`, currently `https://192.168.1.6:8443`.
 
 ### Build the APK
 

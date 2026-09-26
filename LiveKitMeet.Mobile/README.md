@@ -75,7 +75,7 @@ The repository includes `config.json.example` with the supported shape:
 
 ```json
 {
-	"serverUrl": "https://192.168.29.214:8443",
+	"serverUrl": "https://192.168.1.6:8443",
 	"retainLog": 3
 }
 ```

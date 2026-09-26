@@ -1,36 +1,61 @@
 @inject NavigationManager Navigation
+@using livekitmeet.Components.Shared
 
 <CascadingAuthenticationState>
-    <Router AppAssembly="typeof(Program).Assembly">
-        <Found Context="routeData">
-            <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
-                <NotAuthorized>
-                    <LayoutView Layout="typeof(Layout.EmptyLayout)">
-                        <div class="lobby-container">
-                            <div class="lobby-card">
-                                <h1 class="lobby-title">Sign in required</h1>
-                                <p class="lobby-subtitle">Please sign in before opening LiveKit Meet.</p>
-                                <a class="btn-primary" href="@GetLoginUrl()" style="display: block; text-align: center; text-decoration: none;">Go to sign in</a>
-                            </div>
-                        </div>
-                    </LayoutView>
-                </NotAuthorized>
-                <Authorizing>
-                    <LayoutView Layout="typeof(Layout.EmptyLayout)">
-                        <div class="lobby-container"><div class="lobby-card"><p class="lobby-subtitle">Checking your session...</p></div></div>
-                    </LayoutView>
-                </Authorizing>
-            </AuthorizeRouteView>
-            <FocusOnNavigate RouteData="routeData" Selector="h1" />
-        </Found>
-    </Router>
+    <LoggedErrorBoundary @ref="errorBoundary">
+        <ChildContent>
+            <Router AppAssembly="typeof(Program).Assembly">
+                <Found Context="routeData">
+                    <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+                        <NotAuthorized>
+                            <LayoutView Layout="typeof(Layout.EmptyLayout)">
+                                <div class="lobby-container">
+                                    <div class="lobby-card">
+                                        <h1 class="lobby-title">Sign in required</h1>
+                                        <p class="lobby-subtitle">Please sign in before opening LiveKit Meet.</p>
+                                        <a class="btn-primary" href="@GetLoginUrl()" style="display: block; text-align: center; text-decoration: none;">Go to sign in</a>
+                                    </div>
+                                </div>
+                            </LayoutView>
+                        </NotAuthorized>
+                        <Authorizing>
+                            <LayoutView Layout="typeof(Layout.EmptyLayout)">
+                                <div class="lobby-container"><div class="lobby-card"><p class="lobby-subtitle">Checking your session...</p></div></div>
+                            </LayoutView>
+                        </Authorizing>
+                    </AuthorizeRouteView>
+                    <FocusOnNavigate RouteData="routeData" Selector="h1" />
+                </Found>
+            </Router>
+        </ChildContent>
+        <ErrorContent Context="exception">
+            <div class="lobby-container">
+                <section class="lobby-card" role="alert">
+                    <span class="eyebrow">Application error</span>
+                    <h1 class="lobby-title">This page could not finish loading</h1>
+                    <p class="lobby-subtitle">The error was logged. Try the action again or return to the home page.</p>
+                    <div class="d-flex gap-2 mt-4">
+                        <button type="button" class="btn-primary" @onclick="RecoverPage">Try again</button>
+                        <a class="btn-secondary" href="/">Go home</a>
+                    </div>
+                </section>
+            </div>
+        </ErrorContent>
+    </LoggedErrorBoundary>
 </CascadingAuthenticationState>
 
 @code {
+    private LoggedErrorBoundary? errorBoundary;
+
     private string GetLoginUrl()
     {
         var relativeUrl = Navigation.ToBaseRelativePath(Navigation.Uri);
         var returnUrl = string.IsNullOrWhiteSpace(relativeUrl) ? "/" : $"/{relativeUrl}";
         return $"/login?returnUrl={Uri.EscapeDataString(returnUrl)}";
+    }
+
+    private void RecoverPage()
+    {
+        errorBoundary?.Recover();
     }
 }

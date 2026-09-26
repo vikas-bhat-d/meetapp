@@ -1,0 +1,19 @@
+@inherits Microsoft.AspNetCore.Components.ErrorBoundaryBase
+@inject ILogger<LoggedErrorBoundary> Logger
+
+@if (CurrentException is null)
+{
+    @ChildContent
+}
+else if (ErrorContent is not null)
+{
+    @ErrorContent(CurrentException)
+}
+
+@code {
+    protected override Task OnErrorAsync(Exception exception)
+    {
+        Logger.LogError(exception, "Unhandled exception in a Blazor component.");
+        return Task.CompletedTask;
+    }
+}

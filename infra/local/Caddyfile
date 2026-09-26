@@ -1,11 +1,11 @@
 # HTTPS reverse proxy for the LAN development server.
 # The same HTTPS origin carries the website and LiveKit signaling WebSocket.
 
-https://192.168.29.214:8443 {
+https://192.168.1.6:8443 {
     tls internal
 
     # LiveKit client URLs become:
-    # wss://192.168.29.214:8443/livekit/rtc
+    # wss://192.168.1.6:8443/livekit/rtc
     @livekit path /livekit /livekit/*
     handle @livekit {
         uri strip_prefix /livekit

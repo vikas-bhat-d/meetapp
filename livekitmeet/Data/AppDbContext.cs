@@ -44,7 +44,7 @@ public sealed class AppDbContext : DbContext
         {
             entity.HasKey(device => device.Id);
             entity.Property(device => device.Platform).HasMaxLength(32).IsRequired();
-            entity.Property(device => device.PushToken).HasMaxLength(4096).IsRequired();
+            entity.Property(device => device.PushToken).HasMaxLength(512).IsRequired();
             entity.HasIndex(device => device.PushToken).IsUnique();
             entity.HasIndex(device => device.UserId);
             entity.HasOne(device => device.User)

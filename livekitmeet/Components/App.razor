@@ -9,11 +9,22 @@
     <link rel="stylesheet" href="app.css?v=5" />
     <link rel="stylesheet" href="livekitmeet.styles.css" />
     <link rel="stylesheet" href="css/livekit-meet.css?v=5" />
+    <link rel="stylesheet" href="css/error-ui.css" />
     <link rel="icon" type="image/png" href="favicon.png" />
     <HeadOutlet />
 </head>
 
 <body>
+    <div id="components-reconnect-modal" role="alert" aria-live="assertive">
+        <div class="reconnecting show">The connection to LiveKit Meet was interrupted. Trying to reconnect...</div>
+        <div class="failed">The server connection was lost. Meeting controls are unavailable. <a href="" class="reload">Reload LiveKit Meet</a></div>
+        <div class="rejected">The server rejected this connection. <a href="" class="reload">Reload LiveKit Meet</a></div>
+    </div>
+    <div id="blazor-error-ui" role="alert" aria-live="assertive">
+        <span>An unexpected application error occurred. The details were logged.</span>
+        <a href="" class="reload">Reload LiveKit Meet</a>
+        <a class="dismiss">Dismiss</a>
+    </div>
     <Routes @rendermode="InteractiveServer" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.22.2/livekit-client.umd.min.js"></script>
     <script src="js/livekit-bridge.js?v=4"></script>

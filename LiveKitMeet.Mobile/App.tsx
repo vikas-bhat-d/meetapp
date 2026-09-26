@@ -166,7 +166,7 @@ type IncomingCall = PushData & {
 const defaultServerUrl =
   process.env.EXPO_PUBLIC_SERVER_URL ??
   (Constants.expoConfig?.extra?.serverUrl as string | undefined) ??
-    'https://192.168.29.214:8443';
+    'https://192.168.1.6:8443';
 
 const SERVER_URL_STORAGE_KEY = 'livekitmeet.serverUrl';
 
@@ -189,7 +189,7 @@ function normalizeServerUrl(value: unknown): string | null {
   }
 }
 
-const DEFAULT_SERVER_URL = normalizeServerUrl(defaultServerUrl) ?? 'https://192.168.29.214:8443';
+const DEFAULT_SERVER_URL = normalizeServerUrl(defaultServerUrl) ?? 'https://192.168.1.6:8443';
 
 function isHttpUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 2048) {

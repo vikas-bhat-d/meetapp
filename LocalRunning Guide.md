@@ -39,14 +39,14 @@ Find the laptop's LAN IPv4 address:
 ipconfig
 ```
 
-Use the address of the Wi-Fi or Ethernet adapter, for example `192.168.29.214`.
+Use the address of the Wi-Fi or Ethernet adapter, for example `192.168.1.6`.
 
 ### Required replacement in `infra/local/Caddyfile`
 
 Open `infra/local/Caddyfile` and replace **only** the public address on the first line:
 
 ```text
-https://192.168.29.214:8443 {
+https://192.168.1.6:8443 {
 ```
 
 For example, if the laptop address is `192.168.1.25`, use:

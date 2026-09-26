@@ -6,7 +6,7 @@ namespace meetwrapper
 {
     public partial class Form1 : Form
     {
-        private const string HomeUrl = "https://192.168.29.214:3000/rooms/temp/vikt";
+        private const string HomeUrl = "https://192.168.1.6:3000/rooms/temp/vikt";
 
         public Form1()
         {

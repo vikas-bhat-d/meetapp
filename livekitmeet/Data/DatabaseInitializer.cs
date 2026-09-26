@@ -81,7 +81,7 @@ public static class DatabaseInitializer
                         [Id] uniqueidentifier NOT NULL CONSTRAINT [PK_PushDevices] PRIMARY KEY,
                         [UserId] uniqueidentifier NOT NULL,
                         [Platform] nvarchar(32) NOT NULL,
-                        [PushToken] nvarchar(4096) NOT NULL,
+                        [PushToken] nvarchar(512) NOT NULL,
                         [CreatedAtUtc] datetime2 NOT NULL,
                         [LastSeenAtUtc] datetime2 NOT NULL,
                         [IsActive] bit NOT NULL,

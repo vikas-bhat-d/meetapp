@@ -89,7 +89,7 @@ namespace meetwrapper
             // URL box
             this.txtUrl.Name = "txtUrl";
             this.txtUrl.Size = new System.Drawing.Size(850, 23);
-            this.txtUrl.Text = "https://192.168.29.214:3000";
+            this.txtUrl.Text = "https://192.168.1.6:3000";
             this.txtUrl.KeyPress += new System.Windows.Forms.KeyPressEventHandler(this.txtUrl_KeyPress);
 
             // Go

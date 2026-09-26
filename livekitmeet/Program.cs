@@ -7,6 +7,7 @@ using livekitmeet.Components;
 using livekitmeet.Data;
 using livekitmeet.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
@@ -14,6 +15,21 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var configuredRetainedDays = int.TryParse(
+    builder.Configuration["Logging:File:RetainedDays"],
+    out var retainedDays) && retainedDays > 0
+    ? retainedDays
+    : 14;
+var enableNormalLogs = bool.TryParse(
+    builder.Configuration["Logging:File:EnableNormalLogs"],
+    out var configuredEnableNormalLogs) && configuredEnableNormalLogs;
+builder.Logging.AddProvider(new DailyFileLoggerProvider(
+    builder.Environment.ContentRootPath,
+    builder.Configuration["Logging:File:Directory"],
+    builder.Configuration["Logging:File:FileName"],
+    configuredRetainedDays,
+    enableNormalLogs));
 
 static string GetSafeReturnUrl(string? returnUrl)
 {
@@ -85,6 +101,7 @@ static bool TryParseAdminDateRange(
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+builder.Services.AddScoped<CircuitHandler, CircuitLoggingHandler>();
 builder.Services.AddSignalR();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
@@ -103,7 +120,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException("Database:ConnectionString must be configured.");
 }
 
-builder.Services.AddDbContext<AppDbContext>(options =>
+builder.Services.AddDbContextFactory<AppDbContext>(options =>
 {
     switch (databaseProvider)
     {
@@ -241,6 +258,22 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+{
+    if (eventArgs.ExceptionObject is Exception exception)
+    {
+        app.Logger.LogCritical(exception, "Unhandled application-domain exception.");
+    }
+};
+TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+{
+    app.Logger.LogError(eventArgs.Exception, "Unobserved task exception.");
+    eventArgs.SetObserved();
+};
+
+app.UseExceptionHandler("/Error");
+app.UseMiddleware<ExceptionLoggingMiddleware>();
 
 await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
 

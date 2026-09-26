@@ -1,0 +1,23 @@
+﻿2026-09-26T19:29:21.7219536+05:30 [Warning] livekitmeet.Services.CallLogService: Call log finalization did not apply because the status changed concurrently. InvitationId=ba1fa970-3f12-4811-b639-448eea7571a5 CurrentStatus=Ringing
+2026-09-26T19:29:21.7791168+05:30 [Error] Microsoft.EntityFrameworkCore.Query EventId=10100 (Microsoft.EntityFrameworkCore.Query.QueryIterationFailed): An exception occurred while iterating over the results of a query for context type 'livekitmeet.Data.AppDbContext'.
+System.InvalidOperationException: A second operation was started on this context instance before a previous operation completed. This is usually caused by different threads concurrently using the same instance of DbContext. For more information on how to avoid threading issues with DbContext, see https://go.microsoft.com/fwlink/?linkid=2097913.
+   at Microsoft.EntityFrameworkCore.Infrastructure.Internal.ConcurrencyDetector.EnterCriticalSection()
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+System.InvalidOperationException: A second operation was started on this context instance before a previous operation completed. This is usually caused by different threads concurrently using the same instance of DbContext. For more information on how to avoid threading issues with DbContext, see https://go.microsoft.com/fwlink/?linkid=2097913.
+   at Microsoft.EntityFrameworkCore.Infrastructure.Internal.ConcurrencyDetector.EnterCriticalSection()
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+2026-09-26T19:29:21.8066000+05:30 [Error] livekitmeet.Components.Shared.LoggedErrorBoundary: Unhandled exception in a Blazor component.
+System.InvalidOperationException: A second operation was started on this context instance before a previous operation completed. This is usually caused by different threads concurrently using the same instance of DbContext. For more information on how to avoid threading issues with DbContext, see https://go.microsoft.com/fwlink/?linkid=2097913.
+   at Microsoft.EntityFrameworkCore.Infrastructure.Internal.ConcurrencyDetector.EnterCriticalSection()
+   at Microsoft.EntityFrameworkCore.Query.Internal.SingleQueryingEnumerable`1.AsyncEnumerator.MoveNextAsync()
+   at Microsoft.EntityFrameworkCore.Query.ShapedQueryCompilingExpressionVisitor.SingleAsync[TSource](IAsyncEnumerable`1 asyncEnumerable, CancellationToken cancellationToken)
+   at Microsoft.EntityFrameworkCore.Query.ShapedQueryCompilingExpressionVisitor.SingleAsync[TSource](IAsyncEnumerable`1 asyncEnumerable, CancellationToken cancellationToken)
+   at livekitmeet.Services.CallLogService.GetRecentAsync(ClaimsPrincipal user, Int32 page, Int32 pageSize, String searchTerm, CancellationToken cancellationToken) in C:\vikas\BE\Projects\livekit-demo\meet-dotnet\livekitmeet\livekitmeet\Services\CallLogService.cs:line 687
+   at livekitmeet.Components.Pages.Home.OnInitializedAsync() in C:\vikas\BE\Projects\livekit-demo\meet-dotnet\livekitmeet\livekitmeet\Components\Pages\Home.razor:line 123
+   at Microsoft.AspNetCore.Components.ComponentBase.RunInitAndSetParametersAsync()
+2026-09-26T19:31:13.0792103+05:30 [Warning] livekitmeet.Services.CircuitLoggingHandler: Blazor circuit connection lost. CircuitId=X5aluLjXux7zMLHJwgX3d8nz9ZjVwvf-eG2-F7WhaOk
+2026-09-26T19:32:30.0559836+05:30 [Warning] livekitmeet.Services.CircuitLoggingHandler: Blazor circuit connection lost. CircuitId=x_g1Yr3c3cxllUwJKPhGlfMJJTVTxFLTs1cLwRVMEL0
+2026-09-26T19:38:18.3785606+05:30 [Warning] livekitmeet.Services.CallLogService: Call log finalization did not apply because the status changed concurrently. InvitationId=a660024c-4e91-41b9-af8e-7514db745530 CurrentStatus=Ringing
+2026-09-26T19:38:42.5579774+05:30 [Warning] livekitmeet.Services.CircuitLoggingHandler: Blazor circuit connection lost. CircuitId=vF9_gtf-ch7_sgmVOAPE_p7LGL-BHT6XzIthsT6bG2A
+2026-09-26T19:38:42.5675113+05:30 [Warning] livekitmeet.Services.CircuitLoggingHandler: Blazor circuit connection lost. CircuitId=vF9_gtf-ch7_sgmVOAPE_p7LGL-BHT6XzIthsT6bG2A
+2026-09-26T19:38:42.5696086+05:30 [Warning] livekitmeet.Services.CircuitLoggingHandler: Blazor circuit closed. CircuitId=vF9_gtf-ch7_sgmVOAPE_p7LGL-BHT6XzIthsT6bG2A

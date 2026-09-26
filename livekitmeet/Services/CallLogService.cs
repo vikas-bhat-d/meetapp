@@ -155,20 +155,20 @@ public interface ICallLogService
 
 public sealed class CallLogService : ICallLogService
 {
-    private readonly AppDbContext _db;
+    private readonly IDbContextFactory<AppDbContext> _dbContextFactory;
     private readonly IHubContext<CallInvitationHub> _hub;
     private readonly CallInvitationStatusNotifier _statusNotifier;
     private readonly IFirebasePushNotificationService _pushNotifications;
     private readonly ILogger<CallLogService> _logger;
 
     public CallLogService(
-        AppDbContext db,
+        IDbContextFactory<AppDbContext> dbContextFactory,
         IHubContext<CallInvitationHub> hub,
         CallInvitationStatusNotifier statusNotifier,
         IFirebasePushNotificationService pushNotifications,
         ILogger<CallLogService> logger)
     {
-        _db = db;
+        _dbContextFactory = dbContextFactory;
         _hub = hub;
         _statusNotifier = statusNotifier;
         _pushNotifications = pushNotifications;
@@ -183,7 +183,8 @@ public sealed class CallLogService : ICallLogService
         string roomUrl,
         CancellationToken cancellationToken = default)
     {
-        await GetOrCreateRoomAsync(roomName, roomUrl, cancellationToken);
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await GetOrCreateRoomAsync(db, roomName, roomUrl, cancellationToken);
         var log = new CallLog
         {
             InvitationId = invitationId,
@@ -195,8 +196,8 @@ public sealed class CallLogService : ICallLogService
             CreatedAtUtc = DateTime.UtcNow
         };
 
-        _db.CallLogs.Add(log);
-        await _db.SaveChangesAsync(cancellationToken);
+        db.CallLogs.Add(log);
+        await db.SaveChangesAsync(cancellationToken);
         return log;
     }
 
@@ -216,6 +217,7 @@ public sealed class CallLogService : ICallLogService
             return null;
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         _logger.LogInformation(
             "Call invitation join requested. InvitationId={InvitationId} UserId={UserId} RoomName={RoomName}",
             invitationId,
@@ -225,7 +227,7 @@ public sealed class CallLogService : ICallLogService
         if (invitationId is Guid incomingInvitationId)
         {
             await ExpirePendingInvitationsAsync(cancellationToken);
-            var invitation = await _db.CallLogs
+            var invitation = await db.CallLogs
                 .AsNoTracking()
                 .SingleOrDefaultAsync(
                     candidate => candidate.InvitationId == incomingInvitationId,
@@ -261,9 +263,9 @@ public sealed class CallLogService : ICallLogService
             }
         }
 
-        var room = await GetOrCreateRoomAsync(roomName, roomUrl, cancellationToken);
+        var room = await GetOrCreateRoomAsync(db, roomName, roomUrl, cancellationToken);
         var existingSession = room.EndedAtUtc is null
-            ? await _db.CallParticipantSessions
+            ? await db.CallParticipantSessions
                 .Where(session => session.CallRoomLogId == room.Id &&
                                   session.UserId == userId &&
                                   session.LeftAtUtc == null)
@@ -273,7 +275,7 @@ public sealed class CallLogService : ICallLogService
         if (existingSession is not null)
         {
             room.EndedAtUtc = null;
-            await _db.SaveChangesAsync(cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
             _logger.LogInformation(
                 "Call invitation reused an active participant session. InvitationId={InvitationId} UserId={UserId} SessionId={SessionId}",
                 invitationId,
@@ -293,8 +295,8 @@ public sealed class CallLogService : ICallLogService
             InvitationId = invitationId,
             JoinedAtUtc = joinedAtUtc
         };
-        _db.CallParticipantSessions.Add(session);
-        await _db.SaveChangesAsync(cancellationToken);
+        db.CallParticipantSessions.Add(session);
+        await db.SaveChangesAsync(cancellationToken);
         _logger.LogInformation(
             "Call participant session created. InvitationId={InvitationId} UserId={UserId} SessionId={SessionId} RoomName={RoomName}",
             invitationId,
@@ -314,7 +316,8 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
-        var session = await _db.CallParticipantSessions
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var session = await db.CallParticipantSessions
             .Include(candidate => candidate.CallRoomLog)
             .SingleOrDefaultAsync(
                 candidate => candidate.Id == participantSessionId && candidate.UserId == userId,
@@ -324,7 +327,7 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
-        var activeSessions = await _db.CallParticipantSessions
+        var activeSessions = await db.CallParticipantSessions
             .Where(candidate => candidate.CallRoomLogId == session.CallRoomLogId &&
                                 candidate.UserId == userId &&
                                 candidate.LeftAtUtc == null)
@@ -338,14 +341,14 @@ public sealed class CallLogService : ICallLogService
                 activeSession.DurationSeconds = CalculateDurationSeconds(activeSession.JoinedAtUtc, leftAtUtc) ?? 0;
             }
 
-            var anotherParticipantIsActive = await _db.CallParticipantSessions
+            var anotherParticipantIsActive = await db.CallParticipantSessions
                 .AnyAsync(
                     candidate => candidate.CallRoomLogId == session.CallRoomLogId &&
                                 candidate.UserId != userId &&
                                 candidate.LeftAtUtc == null,
                     cancellationToken);
             session.CallRoomLog.EndedAtUtc = anotherParticipantIsActive ? null : leftAtUtc;
-            await _db.SaveChangesAsync(cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
         }
 
         return true;
@@ -353,7 +356,8 @@ public sealed class CallLogService : ICallLogService
 
     public async Task MarkFailedAsync(Guid invitationId, CancellationToken cancellationToken = default)
     {
-        var log = await _db.CallLogs
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var log = await db.CallLogs
             .AsNoTracking()
             .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId,
@@ -363,7 +367,7 @@ public sealed class CallLogService : ICallLogService
             return;
         }
 
-        await _db.CallLogs
+        await db.CallLogs
             .Where(candidate => candidate.InvitationId == invitationId &&
                                 candidate.Status == CallLogStatuses.Ringing)
             .ExecuteUpdateAsync(
@@ -375,9 +379,10 @@ public sealed class CallLogService : ICallLogService
 
     public async Task<int> ExpirePendingInvitationsAsync(CancellationToken cancellationToken = default)
     {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         var now = DateTime.UtcNow;
         var cutoff = now.Subtract(CallInvitationPolicy.Lifetime);
-        var candidates = await _db.CallLogs
+        var candidates = await db.CallLogs
             .AsNoTracking()
             .Where(log => log.Status == CallLogStatuses.Ringing && log.CreatedAtUtc <= cutoff)
             .Select(log => new { log.InvitationId, log.CallerId, log.RecipientId, log.CreatedAtUtc })
@@ -387,7 +392,7 @@ public sealed class CallLogService : ICallLogService
         foreach (var candidate in candidates)
         {
             var expiredAtUtc = candidate.CreatedAtUtc.Add(CallInvitationPolicy.Lifetime);
-            var updated = await _db.CallLogs
+            var updated = await db.CallLogs
                 .Where(log => log.InvitationId == candidate.InvitationId &&
                               log.Status == CallLogStatuses.Ringing &&
                               log.CreatedAtUtc <= cutoff)
@@ -438,8 +443,9 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         await ExpirePendingInvitationsAsync(cancellationToken);
-        var log = await _db.CallLogs
+        var log = await db.CallLogs
             .AsNoTracking()
             .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId,
@@ -481,7 +487,7 @@ public sealed class CallLogService : ICallLogService
         }
 
         var answeredAtUtc = DateTime.UtcNow;
-        var updated = await _db.CallLogs
+        var updated = await db.CallLogs
             .Where(candidate => candidate.InvitationId == invitationId &&
                                 candidate.RecipientId == userId &&
                                 candidate.Status == CallLogStatuses.Ringing)
@@ -492,7 +498,7 @@ public sealed class CallLogService : ICallLogService
                 cancellationToken);
         if (updated == 0)
         {
-            var currentStatus = await _db.CallLogs
+            var currentStatus = await db.CallLogs
                 .AsNoTracking()
                 .Where(candidate => candidate.InvitationId == invitationId &&
                                     candidate.RecipientId == userId)
@@ -531,8 +537,9 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         await ExpirePendingInvitationsAsync(cancellationToken);
-        var log = await _db.CallLogs
+        var log = await db.CallLogs
             .AsNoTracking()
             .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId && candidate.RecipientId == userId,
@@ -543,7 +550,7 @@ public sealed class CallLogService : ICallLogService
         }
 
         var endedAtUtc = DateTime.UtcNow;
-        var updated = await _db.CallLogs
+        var updated = await db.CallLogs
             .Where(candidate => candidate.InvitationId == invitationId &&
                                 candidate.RecipientId == userId &&
                                 candidate.Status == CallLogStatuses.Ringing)
@@ -580,7 +587,8 @@ public sealed class CallLogService : ICallLogService
             return false;
         }
 
-        var log = await _db.CallLogs
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var log = await db.CallLogs
             .AsNoTracking()
             .SingleOrDefaultAsync(
             candidate => candidate.InvitationId == invitationId &&
@@ -597,7 +605,7 @@ public sealed class CallLogService : ICallLogService
 
         var endedAtUtc = DateTime.UtcNow;
         var durationSeconds = CalculateDurationSeconds(log.AnsweredAtUtc, endedAtUtc);
-        var recipientJoined = await _db.CallParticipantSessions
+        var recipientJoined = await db.CallParticipantSessions
             .AsNoTracking()
             .AnyAsync(
                 session => session.InvitationId == invitationId &&
@@ -613,7 +621,7 @@ public sealed class CallLogService : ICallLogService
             log.Status,
             recipientJoined,
             endedStatus);
-        var updated = await _db.CallLogs
+        var updated = await db.CallLogs
             .Where(candidate => candidate.InvitationId == invitationId &&
                                 candidate.Status == CallLogStatuses.Answered)
             .ExecuteUpdateAsync(
@@ -653,10 +661,11 @@ public sealed class CallLogService : ICallLogService
             return new PagedResult<CallLogItem>(Array.Empty<CallLogItem>(), 1, 20, 0);
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
         searchTerm = searchTerm?.Trim();
-        var query = _db.CallLogs
+        var query = db.CallLogs
             .AsNoTracking()
             .Where(log => log.CallerId == userId || log.RecipientId == userId);
         if (!string.IsNullOrWhiteSpace(searchTerm))
@@ -717,14 +726,15 @@ public sealed class CallLogService : ICallLogService
             return new PagedResult<CallRoomHistoryItem>(Array.Empty<CallRoomHistoryItem>(), 1, 20, 0);
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var roomsQuery = _db.CallRoomLogs
+        var roomsQuery = db.CallRoomLogs
             .AsNoTracking()
             .Include(room => room.Participants)
                 .ThenInclude(session => session.User)
             .Where(room => room.Participants.Any(session => session.UserId == userId) ||
-                           _db.CallLogs.Any(log => log.RoomName == room.RoomName &&
+                           db.CallLogs.Any(log => log.RoomName == room.RoomName &&
                                                    (log.CallerId == userId || log.RecipientId == userId)));
         var totalCount = await roomsQuery.CountAsync(cancellationToken);
         var rooms = await roomsQuery
@@ -738,7 +748,7 @@ public sealed class CallLogService : ICallLogService
             .ToArray();
         var invitations = roomNames.Length == 0
             ? new List<CallLog>()
-            : await _db.CallLogs
+            : await db.CallLogs
                 .AsNoTracking()
                 .Include(log => log.Caller)
                 .Include(log => log.Recipient)
@@ -801,9 +811,10 @@ public sealed class CallLogService : ICallLogService
             return new PagedResult<AdminCallRoomLogItem>(Array.Empty<AdminCallRoomLogItem>(), 1, 20, 0);
         }
 
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var roomsQuery = _db.CallRoomLogs
+        var roomsQuery = db.CallRoomLogs
             .AsNoTracking()
             .Include(room => room.Participants)
                 .ThenInclude(session => session.User);
@@ -819,7 +830,7 @@ public sealed class CallLogService : ICallLogService
             .ToArray();
         var invitations = roomNames.Length == 0
             ? new List<CallLog>()
-            : await _db.CallLogs
+            : await db.CallLogs
                 .AsNoTracking()
                 .Include(log => log.Caller)
                 .Include(log => log.Recipient)
@@ -864,7 +875,8 @@ public sealed class CallLogService : ICallLogService
                 EnsureAdmin(user);
                 ValidateDateRange(fromUtc, toUtcExclusive);
 
-                var logs = await _db.CallLogs
+                await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                var logs = await db.CallLogs
                     .AsNoTracking()
                     .Include(log => log.Caller)
                     .Include(log => log.Recipient)
@@ -918,7 +930,8 @@ public sealed class CallLogService : ICallLogService
                 EnsureAdmin(user);
                 ValidateDateRange(fromUtc, toUtcExclusive);
 
-                var rooms = await _db.CallRoomLogs
+                await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                var rooms = await db.CallRoomLogs
                     .AsNoTracking()
                     .Include(room => room.Participants)
                         .ThenInclude(session => session.User)
@@ -926,11 +939,11 @@ public sealed class CallLogService : ICallLogService
                     .OrderBy(room => room.CreatedAtUtc)
                     .ToListAsync(cancellationToken);
 
-                var invitations = await _db.CallLogs
+                var invitations = await db.CallLogs
                     .AsNoTracking()
                     .Include(log => log.Caller)
                     .Include(log => log.Recipient)
-                    .Where(log => _db.CallRoomLogs.Any(room =>
+                    .Where(log => db.CallRoomLogs.Any(room =>
                         room.CreatedAtUtc >= fromUtc &&
                         room.CreatedAtUtc < toUtcExclusive &&
                         room.RoomName == log.RoomName))
@@ -1070,11 +1083,12 @@ public sealed class CallLogService : ICallLogService
                 EnsureAdmin(user);
                 ValidateDateRange(fromUtc, toUtcExclusive);
 
-                await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
-                var callLogsDeleted = await _db.CallLogs
+                await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+                var callLogsDeleted = await db.CallLogs
                     .Where(log => log.CreatedAtUtc >= fromUtc && log.CreatedAtUtc < toUtcExclusive)
                     .ExecuteDeleteAsync(cancellationToken);
-                var roomLogsDeleted = await _db.CallRoomLogs
+                var roomLogsDeleted = await db.CallRoomLogs
                     .Where(room => room.CreatedAtUtc >= fromUtc && room.CreatedAtUtc < toUtcExclusive)
                     .ExecuteDeleteAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
@@ -1117,12 +1131,13 @@ public sealed class CallLogService : ICallLogService
             }
 
     private async Task<CallRoomLog> GetOrCreateRoomAsync(
+        AppDbContext db,
         string roomName,
         string roomUrl,
         CancellationToken cancellationToken)
     {
         var normalizedRoomName = roomName.Trim();
-        var room = await _db.CallRoomLogs
+        var room = await db.CallRoomLogs
             .SingleOrDefaultAsync(candidate => candidate.RoomName == normalizedRoomName, cancellationToken);
         if (room is not null)
         {
@@ -1139,7 +1154,7 @@ public sealed class CallLogService : ICallLogService
             RoomName = normalizedRoomName,
             RoomUrl = roomUrl.Trim()
         };
-        _db.CallRoomLogs.Add(room);
+        db.CallRoomLogs.Add(room);
         return room;
     }
 
