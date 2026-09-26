@@ -10,6 +10,7 @@ public static class DatabaseInitializer
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.EnsureCreatedAsync();
+        await EnsureUserPresenceColumnAsync(db);
         await EnsurePushDevicesTableAsync(db);
         await EnsureCallRoomTablesAsync(db);
         await EnsureCallLogsTableAsync(db);
@@ -45,6 +46,50 @@ public static class DatabaseInitializer
             admin.IsAdmin = true;
             admin.IsActive = true;
             await db.SaveChangesAsync();
+        }
+    }
+
+    private static async Task EnsureUserPresenceColumnAsync(AppDbContext db)
+    {
+        if (db.Database.IsSqlite())
+        {
+            var connection = db.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                await connection.OpenAsync();
+            }
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA table_info(\"Users\");";
+            await using var reader = await command.ExecuteReaderAsync();
+            var hasColumn = false;
+            while (await reader.ReadAsync())
+            {
+                if (string.Equals(reader.GetString(1), "IsDoNotDisturb", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasColumn = true;
+                    break;
+                }
+            }
+
+            if (!hasColumn)
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE \"Users\" ADD COLUMN \"IsDoNotDisturb\" INTEGER NOT NULL DEFAULT 0;");
+            }
+
+            return;
+        }
+
+        if (db.Database.IsSqlServer())
+        {
+            await db.Database.ExecuteSqlRawAsync("""
+                IF COL_LENGTH(N'[Users]', N'IsDoNotDisturb') IS NULL
+                BEGIN
+                    ALTER TABLE [Users]
+                        ADD [IsDoNotDisturb] bit NOT NULL CONSTRAINT [DF_Users_IsDoNotDisturb] DEFAULT 0;
+                END
+                """);
         }
     }
 

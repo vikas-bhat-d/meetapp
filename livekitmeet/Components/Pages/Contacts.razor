@@ -7,6 +7,7 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Navigation
 @inject ICallInvitationService CallInvitationService
+@inject IUserPresenceService UserPresence
 
 <PageTitle>wincall - Contacts</PageTitle>
 
@@ -62,7 +63,7 @@
                         </div>
                     </div>
                     <div class="wc-contact-card-footer">
-                        <span class="wc-online-dot">Available</span>
+                        <span class="wc-online-dot @GetStatusCssClass(GetContactStatus(user.Id))">@GetContactStatus(user.Id)</span>
                         <button type="button" class="wc-primary-icon-button" @onclick="() => CallContactAsync(user.UserName)" disabled="@isStartingCall" aria-label="Call @user.DisplayName" title="Call @user.DisplayName">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l2 5-2.3 1.4a12.7 12.7 0 0 0 4.9 4.9L15 13l5 2v3a1 1 0 0 1-1 1C10.7 19 5 13.3 5 6a2 2 0 0 1 1-2Z" /></svg>
                             <span>Call</span>
@@ -88,6 +89,7 @@
     private PagedResult<AppUser>? contactsPage;
     private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
     private Guid currentUserId;
+    private IReadOnlyDictionary<Guid, UserPresenceSnapshot> contactPresence = new Dictionary<Guid, UserPresenceSnapshot>();
     private string searchTerm = string.Empty;
     private string callStatusMessage = string.Empty;
     private bool isStartingCall;
@@ -153,12 +155,25 @@
                 .ToListAsync();
 
             contactsPage = new PagedResult<AppUser>(items, currentPage, PageSize, totalCount);
+            contactPresence = await UserPresence.GetManyAsync(items.Select(user => user.Id));
         }
         finally
         {
             isLoading = false;
         }
     }
+
+    private string GetContactStatus(Guid userId) => contactPresence.TryGetValue(userId, out var presence)
+        ? presence.Status
+        : UserPresenceStatuses.Unavailable;
+
+    private static string GetStatusCssClass(string status) => status switch
+    {
+        UserPresenceStatuses.InCall => "status-in-call",
+        UserPresenceStatuses.DoNotDisturb => "status-dnd",
+        UserPresenceStatuses.Reachable => "status-reachable",
+        _ => "status-unreachable"
+    };
 
     private async Task CallContactAsync(string username)
     {

@@ -84,6 +84,14 @@ public interface ICallLogService
         string roomUrl,
         CancellationToken cancellationToken = default);
 
+    Task<CallLog> CreateFailedAsync(
+        Guid invitationId,
+        Guid callerId,
+        Guid recipientId,
+        string roomName,
+        string roomUrl,
+        CancellationToken cancellationToken = default);
+
     Task<Guid?> JoinParticipantAsync(
         ClaimsPrincipal user,
         string roomName,
@@ -194,6 +202,33 @@ public sealed class CallLogService : ICallLogService
             RoomUrl = roomUrl.Trim(),
             Status = CallLogStatuses.Ringing,
             CreatedAtUtc = DateTime.UtcNow
+        };
+
+        db.CallLogs.Add(log);
+        await db.SaveChangesAsync(cancellationToken);
+        return log;
+    }
+
+    public async Task<CallLog> CreateFailedAsync(
+        Guid invitationId,
+        Guid callerId,
+        Guid recipientId,
+        string roomName,
+        string roomUrl,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await GetOrCreateRoomAsync(db, roomName, roomUrl, cancellationToken);
+        var log = new CallLog
+        {
+            InvitationId = invitationId,
+            CallerId = callerId,
+            RecipientId = recipientId,
+            RoomName = roomName.Trim(),
+            RoomUrl = roomUrl.Trim(),
+            Status = CallLogStatuses.Failed,
+            CreatedAtUtc = DateTime.UtcNow,
+            EndedAtUtc = DateTime.UtcNow
         };
 
         db.CallLogs.Add(log);

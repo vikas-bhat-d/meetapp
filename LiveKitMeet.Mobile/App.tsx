@@ -585,30 +585,42 @@ export default function App() {
           }));
         }
 
-        document.querySelectorAll('form').forEach(function (form) {
-          const action = new URL(form.action || window.location.href, window.location.href);
-          if (action.pathname !== '/api/auth/logout' || form.dataset.fcmLogoutHooked === 'true') {
-            return;
-          }
+        window.__livekitFcmLogoutToken = fcmToken;
+        if (window.__livekitFcmLogoutHookInstalled !== true) {
+          window.__livekitFcmLogoutHookInstalled = true;
+          document.addEventListener('submit', function (event) {
+            const form = event.target;
+            if (!(form instanceof HTMLFormElement)) {
+              return;
+            }
 
-          form.dataset.fcmLogoutHooked = 'true';
-          form.addEventListener('submit', function (event) {
-            if (form.dataset.fcmLogoutSubmitting === 'true') {
+            const action = new URL(form.action || window.location.href, window.location.href);
+            if (action.pathname !== '/api/auth/logout' || form.dataset.fcmLogoutSubmitting === 'true') {
               return;
             }
 
             event.preventDefault();
             form.dataset.fcmLogoutSubmitting = 'true';
-            fetch('/api/devices/fcm/unregister', {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: fcmToken, platform: 'android' })
-            }).catch(function () {}).finally(function () {
-              form.submit();
+            const currentToken = window.__livekitFcmLogoutToken;
+            const unregister = currentToken
+              ? fetch('/api/devices/fcm/unregister', {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ token: currentToken, platform: 'android' })
+                }).then(function (response) {
+                  window.ReactNativeWebView?.postMessage(JSON.stringify({
+                    type: 'fcm-unregistration',
+                    status: response.status
+                  }));
+                })
+              : Promise.resolve();
+
+            unregister.catch(function () {}).finally(function () {
+              HTMLFormElement.prototype.submit.call(form);
             });
-          });
-        });
+          }, true);
+        }
       })();
       true;
     `;
@@ -865,6 +877,10 @@ export default function App() {
       }
       if (message.type === 'fcm-registration') {
         void appendAppLog('FCM registration response', { status: message.status ?? 0 });
+        return;
+      }
+      if (message.type === 'fcm-unregistration') {
+        void appendAppLog('FCM unregistration response', { status: message.status ?? 0 });
       }
     } catch {
       // Ignore messages that are not diagnostics from our registration script.

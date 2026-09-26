@@ -6,6 +6,7 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ICallLogService CallLogs
 @inject ICallInvitationService CallInvitationService
+@inject IUserPresenceService UserPresence
 
 <PageTitle>wincall - Home</PageTitle>
 
@@ -15,14 +16,44 @@
             <h1>Welcome back, @firstName</h1>
             <p>Pick up where you left off or start a new conversation.</p>
         </div>
-        <a class="wc-user-chip" href="/profile">
-            <span class="wc-avatar">@GetInitials(displayName)</span>
-            <span class="wc-user-chip-copy">
-                <strong>@displayName</strong>
-                <small>My profile</small>
-            </span>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
-        </a>
+        <div class="wc-status-dropdown @(isStatusMenuOpen ? "is-open" : string.Empty)">
+            <button type="button" class="wc-user-chip wc-status-summary" @onclick="ToggleStatusMenu" aria-expanded="@isStatusMenuOpen" aria-controls="status-menu">
+                <span class="wc-avatar">@GetInitials(displayName)</span>
+                <span class="wc-user-chip-copy">
+                    <strong>@displayName</strong>
+                    <small><span class="wc-status-dot @GetStatusCssClass(currentPresence?.Status)"></span>@GetCurrentStatusLabel()</small>
+                </span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5" /></svg>
+            </button>
+            @if (isStatusMenuOpen)
+            {
+                <button type="button" class="wc-status-dismiss-layer" @onclick="CloseStatusMenu" aria-label="Close invitation status menu"></button>
+                <div id="status-menu" class="wc-status-menu">
+                    <span class="wc-status-menu-label">Invitation status</span>
+                    <button type="button" class="wc-status-option @(GetPresenceOptionClass(false))" @onclick="() => SetDoNotDisturbAsync(false)" aria-pressed="@(!IsDoNotDisturb)">
+                        <span class="wc-status-dot status-reachable"></span>
+                        <span><strong>Reachable</strong><small>Receive invitations</small></span>
+                        @if (!IsDoNotDisturb)
+                        {
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+                        }
+                    </button>
+                    <button type="button" class="wc-status-option @(GetPresenceOptionClass(true))" @onclick="() => SetDoNotDisturbAsync(true)" aria-pressed="@IsDoNotDisturb">
+                        <span class="wc-status-dot status-dnd"></span>
+                        <span><strong>Do Not Disturb</strong><small>Block invitations</small></span>
+                        @if (IsDoNotDisturb)
+                        {
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+                        }
+                    </button>
+                    <a class="wc-status-profile-link" href="/profile">My profile <span aria-hidden="true">&rarr;</span></a>
+                    @if (!string.IsNullOrWhiteSpace(presenceStatusMessage))
+                    {
+                        <p class="wc-status-menu-message" role="status">@presenceStatusMessage</p>
+                    }
+                </div>
+            }
+        </div>
     </header>
 
     <div class="wc-dashboard-grid">
@@ -111,16 +142,79 @@
     private string firstName = "there";
     private string targetUsername = string.Empty;
     private string callStatusMessage = string.Empty;
+    private string presenceStatusMessage = string.Empty;
+    private ClaimsPrincipal currentUser = new(new ClaimsIdentity());
+    private UserPresenceSnapshot? currentPresence;
+    private bool isUpdatingPresence;
     private bool isStartingCall;
+    private bool isStatusMenuOpen;
 
     protected override async Task OnInitializedAsync()
     {
         var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = authState.User;
         displayName = authState.User.FindFirst("display_name")?.Value?.Trim() ??
                       authState.User.Identity?.Name?.Trim() ??
                       "there";
         firstName = displayName.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? displayName;
+        if (Guid.TryParse(authState.User.FindFirstValue(ClaimTypes.NameIdentifier), out var currentUserId))
+        {
+            currentPresence = await UserPresence.GetAsync(currentUserId);
+        }
+
         recentCalls = (await CallLogs.GetRecentAsync(authState.User, 1, 10)).Items;
+    }
+
+    private bool IsDoNotDisturb => currentPresence?.IsDoNotDisturb == true;
+
+    private string GetCurrentStatusLabel() => currentPresence?.Status ?? UserPresenceStatuses.Unavailable;
+
+    private string GetPresenceOptionClass(bool dnd) =>
+        IsDoNotDisturb == dnd ? "is-selected" : string.Empty;
+
+    private void ToggleStatusMenu() => isStatusMenuOpen = !isStatusMenuOpen;
+
+    private void CloseStatusMenu() => isStatusMenuOpen = false;
+
+    private static string GetStatusCssClass(string? status) => status switch
+    {
+        UserPresenceStatuses.InCall => "status-in-call",
+        UserPresenceStatuses.DoNotDisturb => "status-dnd",
+        UserPresenceStatuses.Reachable => "status-reachable",
+        _ => "status-unreachable"
+    };
+
+    private async Task SetDoNotDisturbAsync(bool enabled)
+    {
+        isStatusMenuOpen = false;
+        if (isUpdatingPresence || IsDoNotDisturb == enabled)
+        {
+            return;
+        }
+
+        isUpdatingPresence = true;
+        presenceStatusMessage = string.Empty;
+        try
+        {
+            if (!await UserPresence.SetDoNotDisturbAsync(currentUser, enabled))
+            {
+                presenceStatusMessage = "Your invitation status could not be updated.";
+                return;
+            }
+
+            if (Guid.TryParse(currentUser.FindFirstValue(ClaimTypes.NameIdentifier), out var currentUserId))
+            {
+                currentPresence = await UserPresence.GetAsync(currentUserId);
+            }
+        }
+        catch (Exception ex)
+        {
+            presenceStatusMessage = ex.Message;
+        }
+        finally
+        {
+            isUpdatingPresence = false;
+        }
     }
 
     private async Task StartCall()

@@ -1339,6 +1339,106 @@ svg {
     line-height: 1.45;
 }
 
+.room-toast {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 140;
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: min(26rem, calc(100vw - 2rem));
+    padding: 0.8rem 0.8rem 0.8rem 0.9rem;
+    border: 1px solid #49615f;
+    border-radius: 8px;
+    background: #1d2b31;
+    box-shadow: 0 16px 34px rgba(5, 10, 13, 0.3);
+    color: #f2f6f3;
+    animation: roomToastIn 180ms ease-out;
+}
+
+.room-toast-error {
+    border-color: #a34b52;
+}
+
+.room-toast-success {
+    border-color: #4d8369;
+}
+
+.room-toast-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 50%;
+    color: #d8f07d;
+    background: #304345;
+}
+
+.room-toast-error .room-toast-icon {
+    color: #ffb5b8;
+    background: #4b2b31;
+}
+
+.room-toast-icon svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.9;
+}
+
+.room-toast-message {
+    min-width: 0;
+    flex: 1 1 auto;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.room-toast-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.8rem;
+    height: 1.8rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: #b9c5c1;
+    background: transparent;
+    cursor: pointer;
+}
+
+.room-toast-close:hover {
+    border-color: #49615f;
+    color: #ffffff;
+}
+
+.room-toast-close svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 1.8;
+}
+
+@keyframes roomToastIn {
+    from {
+        opacity: 0;
+        transform: translateY(0.5rem);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .modal-actions {
     display: flex;
     justify-content: flex-end;

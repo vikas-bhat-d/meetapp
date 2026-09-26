@@ -9,6 +9,7 @@ public sealed class AppUser
     public string PasswordHash { get; set; } = string.Empty;
     public bool IsAdmin { get; set; }
     public bool IsActive { get; set; } = true;
+    public bool IsDoNotDisturb { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime? LastLoginAtUtc { get; set; }
 

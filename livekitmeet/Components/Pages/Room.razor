@@ -1,3 +1,4 @@
+@page "/rooms"
 @page "/rooms/{RoomName}"
 @attribute [Authorize]
 @layout EmptyLayout
@@ -13,7 +14,17 @@
 
 <PageTitle>@(string.IsNullOrWhiteSpace(RoomName) ? "Meeting" : RoomName) - LiveKit Meet</PageTitle>
 
-@if (needsPreJoin)
+@if (isAutoRedirecting)
+{
+    <div class="lobby-container">
+        <section class="lobby-card">
+            <span class="eyebrow">Preparing meeting</span>
+            <h1 class="lobby-title">Creating your room</h1>
+            <p class="lobby-subtitle">Just a moment.</p>
+        </section>
+    </div>
+}
+else if (needsPreJoin)
 {
     <div class="lobby-container">
         <section class="lobby-card">
@@ -44,6 +55,17 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                 </button>
             </form>
+        </section>
+    </div>
+}
+else if (string.IsNullOrWhiteSpace(RoomName))
+{
+    <div class="lobby-container">
+        <section class="lobby-card">
+            <span class="eyebrow">Room unavailable</span>
+            <h1 class="lobby-title">No room was selected</h1>
+            <p class="lobby-subtitle">Return home and start a new conversation.</p>
+            <a class="btn-primary" href="/">Go home</a>
         </section>
     </div>
 }
@@ -249,9 +271,32 @@ else
     </div>
 }
 
+@if (toast is ToastNotification currentToast)
+{
+    <div class="room-toast @(currentToast.IsError ? "room-toast-error" : "room-toast-success")" role="status" aria-live="polite">
+        <span class="room-toast-icon" aria-hidden="true">
+            @if (currentToast.IsError)
+            {
+                <svg viewBox="0 0 24 24"><path d="M12 4 3.5 19h17L12 4Z" /><path d="M12 9v4M12 16.5v.1" /></svg>
+            }
+            else
+            {
+                <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
+            }
+        </span>
+        <span class="room-toast-message">@currentToast.Message</span>
+        <button type="button" class="room-toast-close" @onclick="DismissToast" aria-label="Dismiss notification">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+    </div>
+}
+
 @code {
     [Parameter]
     public string RoomName { get; set; } = "";
+
+    [SupplyParameterFromQuery(Name = "auto")]
+    public bool QueryAuto { get; set; }
 
     [SupplyParameterFromQuery(Name = "audio")]
     public string? QueryAudio { get; set; }
@@ -273,6 +318,7 @@ else
     private bool needsPreJoin = false;
     private bool isAudioEnabled = true;
     private bool isVideoEnabled = true;
+    private bool isAutoRedirecting;
     private string connectionStatus = "Connecting...";
     private bool showParticipantsDrawer = false;
     private bool showInviteModal = false;
@@ -281,6 +327,8 @@ else
     private bool isRinging = false;
     private string ringStatusMessage = "";
     private bool queryInvitationsSent = false;
+    private ToastNotification? toast;
+    private CancellationTokenSource? toastCancellation;
 
     private List<ParticipantDto> participants = new();
     private DotNetObjectReference<Room>? dotNetRef;
@@ -319,6 +367,12 @@ else
             isVideoEnabled = v;
         }
 
+        isAutoRedirecting = QueryAuto && string.IsNullOrWhiteSpace(RoomName);
+        if (isAutoRedirecting)
+        {
+            return;
+        }
+
         // Links that include both choices can open directly. Older/shareable
         // links without both flags still get the confirmation screen.
         needsPreJoin = !hasAudioFlag || !hasVideoFlag;
@@ -326,7 +380,18 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && !needsPreJoin && !hasJoined)
+        if (!firstRender)
+        {
+            return;
+        }
+
+        if (isAutoRedirecting)
+        {
+            Navigation.NavigateTo(BuildAutoRoomUrl(), replace: true, forceLoad: true);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(RoomName) && !needsPreJoin && !hasJoined)
         {
             await ConnectToRoomAsync();
             await SendQueryInvitationsAsync();
@@ -395,6 +460,7 @@ else
         }
 
         ringStatusMessage = string.Join(" ", results);
+        ShowToast(ringStatusMessage, results.Any(result => result.StartsWith("Could not invite", StringComparison.Ordinal)));
         await InvokeAsync(StateHasChanged);
     }
 
@@ -426,6 +492,7 @@ else
             if (!invitationAnswered)
             {
                 connectionStatus = "Invitation no longer available";
+                ShowToast("This invitation is no longer available.", true);
                 StateHasChanged();
                 return;
             }
@@ -472,6 +539,7 @@ else
                 connectionStatus = string.IsNullOrWhiteSpace(joinResult.Error)
                     ? "Error"
                     : $"Error: {joinResult.Error}";
+                ShowToast(connectionStatus, true);
                 await FinalizeCallLogsAsync();
                 StateHasChanged();
                 return;
@@ -492,6 +560,7 @@ else
                 QueryInvitationId,
                 RoomName,
                 participantName);
+            ShowToast("The room could not be opened.", true);
             await FinalizeCallLogsAsync();
             StateHasChanged();
         }
@@ -567,6 +636,8 @@ else
         ringStatusMessage = $"Sending an invitation to {invitee}...";
         StateHasChanged();
 
+        string toastMessage;
+        bool toastIsError;
         try
         {
             var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
@@ -586,6 +657,8 @@ else
             ringStatusMessage = result.Success
                 ? $"Invitation sent to '{invitee}'."
                 : result.Error ?? "The invitation could not be sent.";
+            toastMessage = ringStatusMessage;
+            toastIsError = !result.Success;
             if (result.Success)
             {
                 inviteUsername = string.Empty;
@@ -594,11 +667,38 @@ else
         catch (Exception ex)
         {
             ringStatusMessage = ex.Message;
+            toastMessage = ringStatusMessage;
+            toastIsError = true;
         }
         finally
         {
             isRinging = false;
             StateHasChanged();
+        }
+
+        ShowToast(toastMessage, toastIsError);
+    }
+
+    private string BuildAutoRoomUrl()
+    {
+        var roomName = $"call-{Guid.NewGuid():N}"[..15];
+        var queryParts = new List<string>();
+        AddQueryPart(queryParts, "audio", QueryAudio);
+        AddQueryPart(queryParts, "video", QueryVideo);
+        AddQueryPart(queryParts, "invite", QueryInvite ?? QueryInvide);
+        AddQueryPart(queryParts, "invitationId", QueryInvitationId);
+
+        var roomUrl = $"/rooms/{Uri.EscapeDataString(roomName)}";
+        return queryParts.Count == 0
+            ? roomUrl
+            : $"{roomUrl}?{string.Join("&", queryParts)}";
+    }
+
+    private static void AddQueryPart(List<string> queryParts, string name, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            queryParts.Add($"{name}={Uri.EscapeDataString(value)}");
         }
     }
 
@@ -643,17 +743,20 @@ else
                 invitationIds.Remove(invitation.InvitationId);
                 pendingInvitations.Remove(invitation);
                 ringStatusMessage = $"Invitation to '{invitation.UserName}' cancelled.";
+                ShowToast(ringStatusMessage, false);
             }
             else
             {
                 invitation.IsCancelling = false;
                 ringStatusMessage = "That invitation is no longer ringing.";
+                ShowToast(ringStatusMessage, true);
             }
         }
         catch (Exception ex)
         {
             invitation.IsCancelling = false;
             ringStatusMessage = ex.Message;
+            ShowToast(ringStatusMessage, true);
         }
 
         await InvokeAsync(StateHasChanged);
@@ -680,6 +783,7 @@ else
                 CallLogStatuses.NotReceived => $"'{invitation.UserName}' did not receive the invitation.",
                 _ => $"Invitation to '{invitation.UserName}' is no longer ringing."
             };
+            ShowToast(ringStatusMessage, update.Status != CallLogStatuses.Answered && update.Status != CallLogStatuses.Cancelled);
             StateHasChanged();
         });
     }
@@ -713,6 +817,7 @@ else
             QueryInvitationId,
             RoomName,
             message);
+        ShowToast("The room connection failed.", true);
         await InvokeAsync(StateHasChanged);
     }
 
@@ -755,6 +860,9 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        toastCancellation?.Cancel();
+        toastCancellation = null;
+        toast = null;
         invitationStatusSubscription?.Dispose();
         participantLeaveRequested = true;
         await FinalizeParticipantSessionAsync();
@@ -875,6 +983,56 @@ else
         }
     }
 
+    private void ShowToast(string message, bool isError)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = toastCancellation;
+        toastCancellation = cancellation;
+        previousCancellation?.Cancel();
+        toast = new ToastNotification(message, isError);
+        _ = InvokeAsync(StateHasChanged);
+        _ = DismissToastAfterDelayAsync(cancellation);
+    }
+
+    private void DismissToast()
+    {
+        toastCancellation?.Cancel();
+        toastCancellation = null;
+        toast = null;
+        StateHasChanged();
+    }
+
+    private async Task DismissToastAfterDelayAsync(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4.5), cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        if (ReferenceEquals(toastCancellation, cancellation))
+        {
+            toastCancellation = null;
+            toast = null;
+            try
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        cancellation.Dispose();
+    }
+
     private sealed class RoomJoinResult
     {
         public bool Success { get; set; }
@@ -893,4 +1051,6 @@ else
         public string UserName { get; }
         public bool IsCancelling { get; set; }
     }
+
+    private sealed record ToastNotification(string Message, bool IsError);
 }

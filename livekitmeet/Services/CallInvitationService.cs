@@ -50,6 +50,7 @@ public sealed class CallInvitationService : ICallInvitationService
     private readonly CallInvitationStatusNotifier _statusNotifier;
     private readonly IFirebasePushNotificationService _pushNotifications;
     private readonly ICallLogService _callLogs;
+    private readonly IUserPresenceService _presence;
     private readonly string _actionTokenSecret;
 
     public CallInvitationService(
@@ -59,6 +60,7 @@ public sealed class CallInvitationService : ICallInvitationService
         CallInvitationStatusNotifier statusNotifier,
         IFirebasePushNotificationService pushNotifications,
         ICallLogService callLogs,
+        IUserPresenceService presence,
         IConfiguration configuration)
     {
         _db = db;
@@ -67,6 +69,7 @@ public sealed class CallInvitationService : ICallInvitationService
         _statusNotifier = statusNotifier;
         _pushNotifications = pushNotifications;
         _callLogs = callLogs;
+        _presence = presence;
         _actionTokenSecret = configuration["Auth:JwtSecret"] ?? throw new InvalidOperationException("Auth:JwtSecret must be configured.");
     }
 
@@ -100,6 +103,14 @@ public sealed class CallInvitationService : ICallInvitationService
         {
             return new CallInvitationAvailability(false, "You cannot call yourself.");
         }
+
+        var presence = await _presence.GetAsync(target.Id, cancellationToken);
+        var unavailableReason = GetInvitationBlockReason(presence);
+        if (unavailableReason is not null)
+        {
+            return new CallInvitationAvailability(false, unavailableReason);
+        }
+
         return new CallInvitationAvailability(true, null);
     }
 
@@ -139,19 +150,23 @@ public sealed class CallInvitationService : ICallInvitationService
         }
 
         roomName = roomName.Trim();
-        if (await _db.CallParticipantSessions.AnyAsync(
-                session => session.UserId == target.Id &&
-                           session.LeftAtUtc == null &&
-                           session.CallRoomLog.RoomName == roomName &&
-                           session.CallRoomLog.EndedAtUtc == null,
-                cancellationToken))
+        var invitationId = Guid.NewGuid();
+        var presence = await _presence.GetAsync(target.Id, cancellationToken);
+        var unavailableReason = GetInvitationBlockReason(presence);
+        if (unavailableReason is not null)
         {
-            return CallInvitationResult.Failed("That user is already in this room.");
+            await _callLogs.CreateFailedAsync(
+                invitationId,
+                callerId,
+                target.Id,
+                roomName,
+                roomUrl,
+                cancellationToken);
+            return CallInvitationResult.Failed(unavailableReason);
         }
 
         var fromUserName = caller.FindFirstValue(ClaimTypes.Name) ?? "User";
         var fromDisplayName = caller.FindFirst("display_name")?.Value ?? fromUserName;
-        var invitationId = Guid.NewGuid();
         var invitation = new CallInvitationMessage(
             invitationId,
             roomName,
@@ -197,16 +212,37 @@ public sealed class CallInvitationService : ICallInvitationService
             {
                 if (pushResult.RegisteredCount == 0)
                 {
+                    await _callLogs.CreateFailedAsync(
+                        invitation.InvitationId,
+                        callerId,
+                        target.Id,
+                        invitation.RoomName,
+                        invitation.RoomUrl,
+                        cancellationToken);
                     return CallInvitationResult.Failed(
                         "That user is not connected to the tray app and has no registered Android device. Make sure the APK is signed in with this exact username.");
                 }
 
                 if (!pushResult.Configured)
                 {
+                    await _callLogs.CreateFailedAsync(
+                        invitation.InvitationId,
+                        callerId,
+                        target.Id,
+                        invitation.RoomName,
+                        invitation.RoomUrl,
+                        cancellationToken);
                     return CallInvitationResult.Failed(
                         pushResult.Error ?? "The Android device is registered, but Firebase server credentials are not configured.");
                 }
 
+                await _callLogs.CreateFailedAsync(
+                    invitation.InvitationId,
+                    callerId,
+                    target.Id,
+                    invitation.RoomName,
+                    invitation.RoomUrl,
+                    cancellationToken);
                 return CallInvitationResult.Failed(
                     pushResult.Error ?? "The Android device is registered, but Firebase could not deliver the notification. Check the server logs.");
             }
@@ -236,6 +272,15 @@ public sealed class CallInvitationService : ICallInvitationService
 
         return new CallInvitationResult(true, null, invitation.InvitationId);
     }
+
+    private static string? GetInvitationBlockReason(UserPresenceSnapshot? presence) => presence switch
+    {
+        null => "That user does not exist.",
+        { IsInCall: true } => "That user is already in a call.",
+        { IsDoNotDisturb: true } => "That user is in Do Not Disturb mode.",
+        { IsReachable: false } => "That user is not reachable right now.",
+        _ => null
+    };
 
     public async Task<bool> CancelAsync(
         ClaimsPrincipal caller,
