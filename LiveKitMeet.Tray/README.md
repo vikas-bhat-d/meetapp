@@ -17,3 +17,11 @@ The tray app must be running and connected for the web Ring action to reach that
 Audio paths are configured in `%APPDATA%\LiveKitMeet\tray-settings.json`. `RingtonePath` defaults to `./ringtone.mp3`, resolved relative to the tray executable directory. `AcceptSoundPath` and `DeclineSoundPath` are empty by default; set either to an absolute path or a path relative to the tray executable directory to enable the corresponding sound. The project copies `ringtone\ringtone.mp3` to the executable directory as `ringtone.mp3`.
 
 Use **Open Meet** from the tray menu, or double-click the icon, to open the meeting site in the WPF WebView2 window. The tray SignalR connection remains active while the window is closed, so incoming invitations continue to ring in the tray.
+
+To open a URL from a shell, pass it as the first argument:
+
+```powershell
+& ".\bin\Debug\net8.0-windows\WinCall.exe" "https://192.168.1.6:8443/rooms/call-example?audio=true&video=false"
+```
+
+If WinCall is already running, the new process forwards the URL to that instance and exits. The existing meeting window is reused, brought to the front, and navigated to the URL. If no instance is running, the new process starts normally and opens the URL in its meeting window.

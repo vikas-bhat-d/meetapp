@@ -30,7 +30,7 @@ public sealed class TrayApplicationContext : IDisposable
     private bool _exitStarted;
     private bool _disposed;
 
-    public TrayApplicationContext()
+    public TrayApplicationContext(string? initialUrl = null)
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _settings = TraySettings.Load();
@@ -67,15 +67,55 @@ public sealed class TrayApplicationContext : IDisposable
         TrayDiagnosticLog.Write(
             $"Tray icon created isCreated={_taskbarIcon.TrayIcon.IsCreated} visibility={_taskbarIcon.TrayIcon.Visibility}");
 
-        if (string.IsNullOrWhiteSpace(_settings.GetRefreshToken()))
+        var hasSavedSession = !string.IsNullOrWhiteSpace(_settings.GetRefreshToken());
+        if (!hasSavedSession)
         {
             SetStatus("Sign in required", false);
-            ShowLogin();
+            if (string.IsNullOrWhiteSpace(initialUrl))
+            {
+                ShowLogin();
+            }
         }
         else
         {
             _savedSessionTask = ConnectSavedSessionAsync();
         }
+
+        if (!string.IsNullOrWhiteSpace(initialUrl))
+        {
+            OpenUrl(initialUrl);
+        }
+    }
+
+    public void OpenUrl(string url)
+    {
+        if (_exitStarted)
+        {
+            return;
+        }
+
+        if (!IsAllowedUrl(url))
+        {
+            TrayDiagnosticLog.Write($"Rejected tray URL activation url={url}");
+            return;
+        }
+
+        ShowMeetWindow(url);
+    }
+
+    private bool IsAllowedUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            !Uri.TryCreate(_settings.ServerUrl, UriKind.Absolute, out var serverUri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Scheme, serverUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(uri.Host, serverUri.Host, StringComparison.OrdinalIgnoreCase) &&
+               uri.Port == serverUri.Port &&
+               string.IsNullOrEmpty(uri.UserInfo);
     }
 
     private void ShowLogin()
@@ -104,13 +144,8 @@ public sealed class TrayApplicationContext : IDisposable
     private void ShowMeetWindow(string url)
     {
         var window = EnsureMeetWindow();
-        if (!window.IsVisible)
-        {
-            window.Show();
-        }
-
         window.NavigateTo(url);
-        window.Activate();
+        window.BringToFront();
     }
 
     private void HandleWebSessionChanged(object? sender, WebSessionChangedEventArgs args)

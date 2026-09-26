@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -60,6 +62,49 @@ public sealed class MeetWindow : Window
         if (_webView.CoreWebView2 is not null)
         {
             _webView.CoreWebView2.Navigate(_pendingUrl);
+        }
+    }
+
+    public void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        Activate();
+        Focus();
+
+        var windowHandle = new WindowInteropHelper(this).Handle;
+        if (windowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var foregroundHandle = GetForegroundWindow();
+        var foregroundThreadId = foregroundHandle == IntPtr.Zero
+            ? 0
+            : GetWindowThreadProcessId(foregroundHandle, IntPtr.Zero);
+        var currentThreadId = GetCurrentThreadId();
+        var attached = foregroundThreadId != 0 && foregroundThreadId != currentThreadId &&
+            AttachThreadInput(foregroundThreadId, currentThreadId, true);
+
+        try
+        {
+            BringWindowToTop(windowHandle);
+            SetForegroundWindow(windowHandle);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(foregroundThreadId, currentThreadId, false);
+            }
         }
     }
 
@@ -161,4 +206,22 @@ public sealed class MeetWindow : Window
         e.Cancel = true;
         Hide();
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr windowHandle);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr windowHandle);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr windowHandle, IntPtr processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint sourceThreadId, uint targetThreadId, bool attach);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 }
